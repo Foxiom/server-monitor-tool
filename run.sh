@@ -3,6 +3,18 @@
 # Exit on error
 set -e
 
+# Function to clean up on error
+cleanup() {
+  if [ -d "monitor-tool" ]; then
+    echo "❌ An error occurred. Cleaning up..."
+    rm -rf monitor-tool
+  fi
+  exit 1
+}
+
+# Set up error handling
+trap cleanup ERR
+
 # Check if Node.js is installed
 if ! command -v node &> /dev/null; then
   echo "❌ Node.js is not installed. Please install Node.js first."
