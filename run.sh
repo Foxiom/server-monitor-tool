@@ -21,6 +21,12 @@ if ! command -v node &> /dev/null; then
   exit 1
 fi
 
+# Remove existing monitor-tool directory if it exists
+if [ -d "monitor-tool" ]; then
+  echo "🗑️  Removing existing monitor-tool directory..."
+  rm -rf monitor-tool
+fi
+
 # Create app directory
 mkdir -p monitor-tool && cd monitor-tool
 
