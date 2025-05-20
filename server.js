@@ -4,6 +4,33 @@ const os = require('os');
 const app = express();
 const PORT = process.env.PORT || 9999;
 
+// Function to get primary IP address
+function getPrimaryIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip internal and non-IPv4 addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+// Function to get device ID (using MAC address)
+function getDeviceId() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.mac && iface.mac !== '00:00:00:00:00:00') {
+        return iface.mac.replace(/:/g, '');
+      }
+    }
+  }
+  return 'unknown';
+}
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
@@ -19,6 +46,10 @@ app.get('/system', (req, res) => {
     type: os.type(),
     arch: os.arch(),
     
+    // Device identification
+    deviceId: getDeviceId(),
+    ipAddress: getPrimaryIP(),
+    
     // Memory information
     memory: {
       totalInMB: os.totalmem() / 1024 / 1024,
@@ -33,10 +64,7 @@ app.get('/system', (req, res) => {
       cores: os.cpus().length,
       speed: os.cpus()[0].speed
     },
-    
-    // Network information
-    network: os.networkInterfaces(),
-    
+      
     // System uptime
     uptimeInSeconds: os.uptime(),
     
