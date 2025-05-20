@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Default interval in seconds
+INTERVAL=${1:-5}  # Use first argument or default to 5 seconds
+
 # Ensure required tools are installed
 if ! command -v jq &> /dev/null; then
     sudo apt update && sudo apt install -y jq
@@ -37,8 +40,8 @@ log_uptime() {
   echo "$UPTIME_JSON" >> "$LOG_FILE"
 }
 
-# Log uptime every 30 seconds
+# Log uptime at specified interval
 while true; do
   log_uptime
-  sleep 30
+  sleep "$INTERVAL"
 done
