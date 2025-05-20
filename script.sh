@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# Ensure required tools are installed
+if ! command -v jq &> /dev/null; then
+    sudo apt update && sudo apt install -y jq
+fi
+if ! command -v curl &> /dev/null; then
+    sudo apt install -y curl
+fi
+
 # Get the hostname
 HOSTNAME=$(hostname)
 
