@@ -34,12 +34,6 @@ RAM_TOTAL=$(free -m | awk '/Mem:/ {print $2}')
 # Get storage details (total in GB)
 STORAGE_TOTAL=$(df -h / | awk 'NR==2 {print $2}' | tr -d 'G')
 
-# Get uptime (in seconds)
-UPTIME=$(cat /proc/uptime | awk '{print $1}')
-
-# Get total number of processes
-PROCESSES=$(ps -e | wc -l)
-
 # Create JSON object
 JSON=$(jq -n \
   --arg hostname "$HOSTNAME" \
@@ -49,8 +43,6 @@ JSON=$(jq -n \
   --arg bit "$BIT" \
   --arg ram_total "$RAM_TOTAL" \
   --arg storage_total "$STORAGE_TOTAL" \
-  --arg uptime "$UPTIME" \
-  --arg processes "$PROCESSES" \
   '{hostname: $hostname, machine_id: $machine_id, public_ip: $public_ip, os: $os, bit: $bit, ram_total_mb: $ram_total, storage_total_gb: $storage_total, uptime_seconds: $uptime, total_processes: $processes}')
 
 # Output the JSON
