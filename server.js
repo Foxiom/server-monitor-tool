@@ -205,9 +205,7 @@ async function monitorSystemMetrics() {
     console.log(`Memory Usage: ${memUsagePercentage}%`);
     console.log(`CPU Usage: ${cpuUsagePercentage}%`);
     console.log('Disk Usage:');
-    disks.forEach(disk => {
-      console.log(`  ${disk.mounted}: ${disk.capacity} used`);
-    });
+  
     console.log('========================\n');
 
   } catch (error) {
