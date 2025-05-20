@@ -9,7 +9,6 @@ function getPrimaryIP() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
-      // Skip internal and non-IPv4 addresses
       if (iface.family === 'IPv4' && !iface.internal) {
         return iface.address;
       }
@@ -30,6 +29,31 @@ function getDeviceId() {
   }
   return 'unknown';
 }
+
+// Function to format memory size
+function formatMemorySize(bytes) {
+  const mb = bytes / 1024 / 1024;
+  return `${mb.toFixed(2)} MB`;
+}
+
+// Function to monitor memory usage
+function monitorMemoryUsage() {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const usagePercentage = ((usedMem / totalMem) * 100).toFixed(2);
+
+  console.log('\n=== Memory Usage Report ===');
+  console.log(`Total Memory: ${formatMemorySize(totalMem)}`);
+  console.log(`Used Memory: ${formatMemorySize(usedMem)}`);
+  console.log(`Free Memory: ${formatMemorySize(freeMem)}`);
+  console.log(`Usage: ${usagePercentage}%`);
+  console.log('========================\n');
+}
+
+// Start memory monitoring
+setInterval(monitorMemoryUsage, 30000); // Run every 30 seconds
+monitorMemoryUsage(); // Run immediately on startup
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -64,7 +88,7 @@ app.get('/system', (req, res) => {
       cores: os.cpus().length,
       speed: os.cpus()[0].speed
     },
-      
+    
     // System uptime
     uptimeInSeconds: os.uptime(),
     
@@ -76,8 +100,8 @@ app.get('/system', (req, res) => {
 });
 
 // Default route
-app.get('/', (req, res) => {
-  res.send('Hello from Express!');
+app.get('/', (_, res) => {
+  res.send('Hello');
 });
 
 // Start the server
