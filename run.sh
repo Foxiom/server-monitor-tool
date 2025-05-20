@@ -33,17 +33,26 @@ mkdir -p monitor-tool && cd monitor-tool
 # Add timestamp to prevent caching
 TIMESTAMP=$(date +%s)
 
+# Common headers for curl to prevent caching
+CURL_HEADERS=(
+  "Cache-Control: no-cache, no-store, must-revalidate"
+  "Pragma: no-cache"
+  "Expires: 0"
+)
+
 # Download server.js
 echo "⬇️ Downloading server.js..."
-curl -H "Cache-Control: no-cache" -o server.js "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/server.js?t=$TIMESTAMP"
+curl -H "${CURL_HEADERS[0]}" -H "${CURL_HEADERS[1]}" -H "${CURL_HEADERS[2]}" \
+     -o server.js "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/server.js?t=$TIMESTAMP"
 
-# Download package.json (optional)
-if curl -H "Cache-Control: no-cache" --output package.json --silent --head --fail "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/package.json?t=$TIMESTAMP"; then
-  echo "⬇️ Downloading package.json..."
-  curl -H "Cache-Control: no-cache" -o package.json "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/package.json?t=$TIMESTAMP"
-  echo "📦 Installing dependencies..."
-  npm install
-fi
+# Download package.json
+echo "⬇️ Downloading package.json..."
+curl -H "${CURL_HEADERS[0]}" -H "${CURL_HEADERS[1]}" -H "${CURL_HEADERS[2]}" \
+     -o package.json "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/package.json?t=$TIMESTAMP"
+
+# Install dependencies
+echo "📦 Installing dependencies..."
+npm install
 
 # Run the server
 echo "🚀 Starting server..."
