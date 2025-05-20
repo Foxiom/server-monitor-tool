@@ -305,7 +305,57 @@ app.get('/', (_, res) => {
   res.send('Hello');
 });
 
+// Function to save system information
+async function saveSystemInfo() {
+  const systemInfo = {
+    // Basic system info
+    hostname: os.hostname(),
+    platform: os.platform(),
+    release: os.release(),
+    type: os.type(),
+    arch: os.arch(),
+    
+    // Device identification
+    deviceId: getDeviceId(),
+    ipAddress: getPrimaryIP(),
+    
+    // Memory information
+    memory: {
+      totalInMB: os.totalmem() / 1024 / 1024,
+      freeInMB: os.freemem() / 1024 / 1024,
+      usedInMB: (os.totalmem() - os.freemem()) / 1024 / 1024,
+      usagePercentage: ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(2)
+    },
+    
+    // CPU information
+    cpu: {
+      model: os.cpus()[0].model,
+      cores: os.cpus().length,
+      speed: os.cpus()[0].speed,
+      loadAverage: os.loadavg()
+    },
+    
+    // System uptime
+    uptimeInSeconds: os.uptime(),
+    
+    // Network information
+    network: os.networkInterfaces()
+  };
+
+  try {
+    await Server.findOneAndUpdate(
+      { deviceId: systemInfo.deviceId },
+      { ...systemInfo, lastUpdated: new Date() },
+      { upsert: true, new: true }
+    );
+    console.log('System information saved to MongoDB');
+  } catch (error) {
+    console.error('Error saving system information:', error);
+  }
+}
+
 // Start the server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
+  await saveSystemInfo(); // Save system info on startup
 });
