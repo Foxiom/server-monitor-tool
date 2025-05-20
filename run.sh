@@ -14,12 +14,12 @@ mkdir -p monitor-tool && cd monitor-tool
 
 # Download server.js
 echo "⬇️ Downloading server.js..."
-curl -o server.js https://raw.githubusercontent.com/your-username/your-repo-name/main/server.js
+curl -o server.js https://raw.githubusercontent.com/Foxiom/server-monitor-tool/refs/heads/main/server.js
 
 # Download package.json (optional)
-if curl --output package.json --silent --head --fail https://raw.githubusercontent.com/your-username/your-repo-name/main/package.json; then
+if curl --output package.json --silent --head --fail https://raw.githubusercontent.com/Foxiom/server-monitor-tool/refs/heads/main/package.json; then
   echo "⬇️ Downloading package.json..."
-  curl -o package.json https://raw.githubusercontent.com/your-username/your-repo-name/main/package.json
+  curl -o package.json https://raw.githubusercontent.com/Foxiom/server-monitor-tool/refs/heads/main/package.json
   echo "📦 Installing dependencies..."
   npm install
 fi
