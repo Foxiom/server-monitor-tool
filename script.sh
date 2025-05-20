@@ -37,7 +37,7 @@ log_uptime() {
     --arg timestamp "$TIMESTAMP" \
     --arg uptime "$UPTIME" \
     '{timestamp: $timestamp, uptime: $uptime}')
-  echo "$UPTIME_JSON" >> "$LOG_FILE"
+  echo "$UPTIME_JSON"
 }
 
 # Log uptime at specified interval
