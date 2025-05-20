@@ -21,9 +21,9 @@ app.get('/system', (req, res) => {
     
     // Memory information
     memory: {
-      total: os.totalmem(),
-      free: os.freemem(),
-      used: os.totalmem() - os.freemem(),
+      totalInMB: os.totalmem() / 1024 / 1024,
+      freeInMB: os.freemem() / 1024 / 1024,
+      usedInMB: (os.totalmem() - os.freemem()) / 1024 / 1024,
       usagePercentage: ((os.totalmem() - os.freemem()) / os.totalmem() * 100).toFixed(2)
     },
     
@@ -38,7 +38,7 @@ app.get('/system', (req, res) => {
     network: os.networkInterfaces(),
     
     // System uptime
-    uptime: os.uptime(),
+    uptimeInSeconds: os.uptime(),
     
     // Load average
     loadAverage: os.loadavg()
