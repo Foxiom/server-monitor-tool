@@ -1,8 +1,32 @@
 // server.js
 const express = require('express');
 const os = require('os');
+const mongoose = require('mongoose');
 const app = express();
 const PORT = process.env.PORT || 9999;
+
+// MongoDB connection
+mongoose.connect('mongodb+srv://foxiomdevelopers:j86D1QXz6UYeH1Lq@testcluster.qqvseae.mongodb.net/server-monitor', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('Connected to MongoDB');
+}).catch((err) => {
+  console.error('MongoDB connection error:', err);
+});
+
+// Memory Usage Schema
+const memoryUsageSchema = new mongoose.Schema({
+  totalMemory: Number,
+  usedMemory: Number,
+  freeMemory: Number,
+  usagePercentage: Number,
+  hostname: String,
+  deviceId: String,
+  timestamp: { type: Date, default: Date.now }
+});
+
+const MemoryUsage = mongoose.model('MemoryUsage', memoryUsageSchema);
 
 // Function to get primary IP address
 function getPrimaryIP() {
@@ -37,18 +61,35 @@ function formatMemorySize(bytes) {
 }
 
 // Function to monitor memory usage
-function monitorMemoryUsage() {
+async function monitorMemoryUsage() {
   const totalMem = os.totalmem();
   const freeMem = os.freemem();
   const usedMem = totalMem - freeMem;
   const usagePercentage = ((usedMem / totalMem) * 100).toFixed(2);
+  const deviceId = getDeviceId();
 
+  // Log to console
   console.log('\n=== Memory Usage Report ===');
   console.log(`Total Memory: ${formatMemorySize(totalMem)}`);
   console.log(`Used Memory: ${formatMemorySize(usedMem)}`);
   console.log(`Free Memory: ${formatMemorySize(freeMem)}`);
   console.log(`Usage: ${usagePercentage}%`);
   console.log('========================\n');
+
+  // Save to MongoDB
+  try {
+    const memoryData = new MemoryUsage({
+      totalMemory: totalMem,
+      usedMemory: usedMem,
+      freeMemory: freeMem,
+      usagePercentage: parseFloat(usagePercentage),
+      hostname: os.hostname(),
+      deviceId: deviceId
+    });
+    await memoryData.save();
+  } catch (error) {
+    console.error('Error saving memory data:', error);
+  }
 }
 
 // Start memory monitoring
@@ -58,6 +99,19 @@ monitorMemoryUsage(); // Run immediately on startup
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
+// Get memory history endpoint
+app.get('/memory-history', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100; // Default to last 100 records
+    const history = await MemoryUsage.find()
+      .sort({ timestamp: -1 })
+      .limit(limit);
+    res.json(history);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching memory history' });
+  }
 });
 
 // Comprehensive system information endpoint
