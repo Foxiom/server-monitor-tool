@@ -2,6 +2,7 @@
 const express = require('express');
 const os = require('os');
 const mongoose = require('mongoose');
+const diskInfo = require('node-disk-info');
 const app = express();
 const PORT = process.env.PORT || 9999;
 
@@ -15,18 +16,54 @@ mongoose.connect('mongodb+srv://foxiomdevelopers:j86D1QXz6UYeH1Lq@testcluster.qq
   console.error('MongoDB connection error:', err);
 });
 
-// Memory Usage Schema
-const memoryUsageSchema = new mongoose.Schema({
-  totalMemory: Number,
-  usedMemory: Number,
-  freeMemory: Number,
-  usagePercentage: Number,
+// System Metrics Schema
+const systemMetricsSchema = new mongoose.Schema({
+  timestamp: { type: Date, default: Date.now },
   hostname: String,
   deviceId: String,
-  timestamp: { type: Date, default: Date.now }
+  
+  // Memory metrics
+  memory: {
+    total: Number,
+    used: Number,
+    free: Number,
+    usagePercentage: Number
+  },
+  
+  // CPU metrics
+  cpu: {
+    model: String,
+    cores: Number,
+    speed: Number,
+    loadAverage: [Number],
+    usagePercentage: Number
+  },
+  
+  // Disk metrics
+  disks: [{
+    filesystem: String,
+    blocks: Number,
+    used: Number,
+    available: Number,
+    capacity: Number,
+    mounted: String
+  }],
+  
+  // Network metrics
+  network: {
+    interfaces: [{
+      name: String,
+      address: String,
+      netmask: String,
+      mac: String,
+      family: String
+    }],
+    bytesReceived: Number,
+    bytesSent: Number
+  }
 });
 
-const MemoryUsage = mongoose.model('MemoryUsage', memoryUsageSchema);
+const SystemMetrics = mongoose.model('SystemMetrics', systemMetricsSchema);
 
 // Function to get primary IP address
 function getPrimaryIP() {
@@ -41,7 +78,7 @@ function getPrimaryIP() {
   return '127.0.0.1';
 }
 
-// Function to get device ID (using MAC address)
+// Function to get device ID
 function getDeviceId() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -54,63 +91,151 @@ function getDeviceId() {
   return 'unknown';
 }
 
-// Function to format memory size
-function formatMemorySize(bytes) {
-  const mb = bytes / 1024 / 1024;
-  return `${mb.toFixed(2)} MB`;
+// Function to calculate CPU usage
+function calculateCPUUsage() {
+  const cpus = os.cpus();
+  let totalIdle = 0;
+  let totalTick = 0;
+
+  cpus.forEach(cpu => {
+    for (const type in cpu.times) {
+      totalTick += cpu.times[type];
+    }
+    totalIdle += cpu.times.idle;
+  });
+
+  return {
+    idle: totalIdle / cpus.length,
+    total: totalTick / cpus.length
+  };
 }
 
-// Function to monitor memory usage
-async function monitorMemoryUsage() {
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedMem = totalMem - freeMem;
-  const usagePercentage = ((usedMem / totalMem) * 100).toFixed(2);
-  const deviceId = getDeviceId();
+let lastCPUInfo = calculateCPUUsage();
 
-  // Log to console
-  console.log('\n=== Memory Usage Report ===');
-  console.log(`Total Memory: ${formatMemorySize(totalMem)}`);
-  console.log(`Used Memory: ${formatMemorySize(usedMem)}`);
-  console.log(`Free Memory: ${formatMemorySize(freeMem)}`);
-  console.log(`Usage: ${usagePercentage}%`);
-  console.log('========================\n');
+// Function to get network stats
+function getNetworkStats() {
+  const interfaces = os.networkInterfaces();
+  const stats = {
+    interfaces: [],
+    bytesReceived: 0,
+    bytesSent: 0
+  };
 
-  // Save to MongoDB
+  for (const [name, netInterface] of Object.entries(interfaces)) {
+    for (const iface of netInterface) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        stats.interfaces.push({
+          name,
+          address: iface.address,
+          netmask: iface.netmask,
+          mac: iface.mac,
+          family: iface.family
+        });
+      }
+    }
+  }
+
+  return stats;
+}
+
+// Function to monitor system metrics
+async function monitorSystemMetrics() {
   try {
-    const memoryData = new MemoryUsage({
-      totalMemory: totalMem,
-      usedMemory: usedMem,
-      freeMemory: freeMem,
-      usagePercentage: parseFloat(usagePercentage),
+    // Get memory info
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memUsagePercentage = ((usedMem / totalMem) * 100).toFixed(2);
+
+    // Get CPU info
+    const currentCPUInfo = calculateCPUUsage();
+    const idleDifference = currentCPUInfo.idle - lastCPUInfo.idle;
+    const totalDifference = currentCPUInfo.total - lastCPUInfo.total;
+    const cpuUsagePercentage = 100 - Math.round(100 * idleDifference / totalDifference);
+    lastCPUInfo = currentCPUInfo;
+
+    // Get disk info
+    const disks = await diskInfo.getDiskInfo();
+
+    // Get network info
+    const networkStats = getNetworkStats();
+
+    // Create metrics document
+    const metrics = new SystemMetrics({
       hostname: os.hostname(),
-      deviceId: deviceId
+      deviceId: getDeviceId(),
+      memory: {
+        total: totalMem,
+        used: usedMem,
+        free: freeMem,
+        usagePercentage: parseFloat(memUsagePercentage)
+      },
+      cpu: {
+        model: os.cpus()[0].model,
+        cores: os.cpus().length,
+        speed: os.cpus()[0].speed,
+        loadAverage: os.loadavg(),
+        usagePercentage: cpuUsagePercentage
+      },
+      disks: disks.map(disk => ({
+        filesystem: disk.filesystem,
+        blocks: disk.blocks,
+        used: disk.used,
+        available: disk.available,
+        capacity: disk.capacity,
+        mounted: disk.mounted
+      })),
+      network: networkStats
     });
-    await memoryData.save();
+
+    // Save to MongoDB
+    await metrics.save();
+
+    // Log to console
+    console.log('\n=== System Metrics Report ===');
+    console.log(`Memory Usage: ${memUsagePercentage}%`);
+    console.log(`CPU Usage: ${cpuUsagePercentage}%`);
+    console.log('Disk Usage:');
+    disks.forEach(disk => {
+      console.log(`  ${disk.mounted}: ${disk.capacity}% used`);
+    });
+    console.log('========================\n');
+
   } catch (error) {
-    console.error('Error saving memory data:', error);
+    console.error('Error monitoring system metrics:', error);
   }
 }
 
-// Start memory monitoring
-setInterval(monitorMemoryUsage, 30000); // Run every 30 seconds
-monitorMemoryUsage(); // Run immediately on startup
+// Start monitoring
+setInterval(monitorSystemMetrics, 30000); // Run every 30 seconds
+monitorSystemMetrics(); // Run immediately on startup
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
 });
 
-// Get memory history endpoint
-app.get('/memory-history', async (req, res) => {
+// Get metrics history endpoint
+app.get('/metrics-history', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 100; // Default to last 100 records
-    const history = await MemoryUsage.find()
+    const limit = parseInt(req.query.limit) || 100;
+    const history = await SystemMetrics.find()
       .sort({ timestamp: -1 })
       .limit(limit);
     res.json(history);
   } catch (error) {
-    res.status(500).json({ error: 'Error fetching memory history' });
+    res.status(500).json({ error: 'Error fetching metrics history' });
+  }
+});
+
+// Get latest metrics endpoint
+app.get('/metrics', async (req, res) => {
+  try {
+    const latestMetrics = await SystemMetrics.findOne()
+      .sort({ timestamp: -1 });
+    res.json(latestMetrics);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching latest metrics' });
   }
 });
 
@@ -140,14 +265,15 @@ app.get('/system', (req, res) => {
     cpu: {
       model: os.cpus()[0].model,
       cores: os.cpus().length,
-      speed: os.cpus()[0].speed
+      speed: os.cpus()[0].speed,
+      loadAverage: os.loadavg()
     },
     
     // System uptime
     uptimeInSeconds: os.uptime(),
     
-    // Load average
-    loadAverage: os.loadavg()
+    // Network information
+    network: os.networkInterfaces()
   };
   
   res.json(systemInfo);
