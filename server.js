@@ -39,16 +39,6 @@ const systemMetricsSchema = new mongoose.Schema({
     usagePercentage: Number
   },
   
-  // Disk metrics
-  disks: [{
-    filesystem: String,
-    blocks: Number,
-    used: Number,
-    available: Number,
-    capacity: String,  // Changed to String to store percentage with % symbol
-    mounted: String
-  }],
-  
   // Network metrics
   network: {
     interfaces: [{
@@ -154,8 +144,7 @@ async function monitorSystemMetrics() {
     const cpuUsagePercentage = 100 - Math.round(100 * idleDifference / totalDifference);
     lastCPUInfo = currentCPUInfo;
 
-    // Get disk info
-    const disks = await diskInfo.getDiskInfo();
+
 
     // Get network info
     const networkStats = getNetworkStats();
@@ -177,14 +166,6 @@ async function monitorSystemMetrics() {
         loadAverage: os.loadavg(),
         usagePercentage: cpuUsagePercentage
       },
-      disks: disks.map(disk => ({
-        filesystem: disk.filesystem,
-        blocks: disk.blocks,
-        used: disk.used,
-        available: disk.available,
-        capacity: disk.capacity,  // Now storing the raw capacity string
-        mounted: disk.mounted
-      })),
       network: networkStats
     });
 
