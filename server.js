@@ -55,6 +55,34 @@ const systemMetricsSchema = new mongoose.Schema({
 
 const SystemMetrics = mongoose.model('SystemMetrics', systemMetricsSchema);
 
+// Server Schema
+const serverSchema = new mongoose.Schema({
+  hostname: String,
+  platform: String,
+  release: String,
+  type: String,
+  arch: String,
+  deviceId: String,
+  ipAddress: String,
+  memory: {
+    totalInMB: Number,
+    freeInMB: Number,
+    usedInMB: Number,
+    usagePercentage: Number
+  },
+  cpu: {
+    model: String,
+    cores: Number,
+    speed: Number,
+    loadAverage: [Number]
+  },
+  uptimeInSeconds: Number,
+  network: Object,
+  lastUpdated: { type: Date, default: Date.now }
+});
+
+const Server = mongoose.model('Server', serverSchema);
+
 // Function to get primary IP address
 function getPrimaryIP() {
   const interfaces = os.networkInterfaces();
@@ -221,7 +249,7 @@ app.get('/metrics', async (req, res) => {
 });
 
 // Comprehensive system information endpoint
-app.get('/system', (req, res) => {
+app.get('/system', async (req, res) => {
   const systemInfo = {
     // Basic system info
     hostname: os.hostname(),
@@ -257,7 +285,19 @@ app.get('/system', (req, res) => {
     network: os.networkInterfaces()
   };
   
-  res.json(systemInfo);
+  try {
+    // Update or create server document
+    await Server.findOneAndUpdate(
+      { deviceId: systemInfo.deviceId },
+      { ...systemInfo, lastUpdated: new Date() },
+      { upsert: true, new: true }
+    );
+    
+    res.json(systemInfo);
+  } catch (error) {
+    console.error('Error saving server information:', error);
+    res.status(500).json({ error: 'Error saving server information' });
+  }
 });
 
 // Default route
