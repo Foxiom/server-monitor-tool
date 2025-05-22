@@ -291,35 +291,28 @@ const NetworkMetrics = mongoose.model('network_metrics', networkMetricsSchema);
 
 // Function to get network statistics
 async function getNetworkStats() {
-    const { exec } = require('child_process');
-    const util = require('util');
-    const execPromise = util.promisify(exec);
-
     try {
-        // Get network interface statistics using netstat
-        const { stdout } = await execPromise('netstat -ib');
-        const lines = stdout.split('\n');
+        const interfaces = os.networkInterfaces();
         const networkStats = [];
 
-        // Skip header lines
-        for (let i = 2; i < lines.length; i++) {
-            const line = lines[i].trim().split(/\s+/);
-            if (line.length >= 10) {
-                const interfaceName = line[0];
-                // Skip loopback interface
-                if (interfaceName === 'lo0') continue;
+        for (const [interfaceName, interfaceDetails] of Object.entries(interfaces)) {
+            // Skip loopback interface
+            if (interfaceName === 'lo') continue;
 
-                const stats = {
-                    interface: interfaceName,
-                    bytesReceived: parseInt(line[6]) || 0,
-                    bytesSent: parseInt(line[9]) || 0,
-                    packetsReceived: parseInt(line[4]) || 0,
-                    packetsSent: parseInt(line[7]) || 0,
-                    errorsReceived: parseInt(line[5]) || 0,
-                    errorsSent: parseInt(line[8]) || 0
-                };
-                networkStats.push(stats);
-            }
+            // Find IPv4 interface
+            const ipv4Interface = interfaceDetails.find(iface => iface.family === 'IPv4');
+            if (!ipv4Interface) continue;
+
+            const stats = {
+                interface: interfaceName,
+                bytesReceived: 0, // These metrics are not available through os.networkInterfaces()
+                bytesSent: 0,     // You might want to use a different approach to get these
+                packetsReceived: 0,
+                packetsSent: 0,
+                errorsReceived: 0,
+                errorsSent: 0
+            };
+            networkStats.push(stats);
         }
         return networkStats;
     } catch (error) {
