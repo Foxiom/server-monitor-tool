@@ -53,112 +53,6 @@ async function collectDeviceDetails() {
     }
 }
 
-// API Endpoint to fetch CPU metrics
-app.get('/api/cpu-metrics', async (req, res) => {
-    try {
-        const { deviceId, startDate, endDate } = req.query;
-        let query = {};
-
-        if (deviceId) {
-            query.deviceId = deviceId;
-        }
-
-        // Add date range filter if provided
-        if (startDate || endDate) {
-            query.timestamp = {};
-            if (startDate) {
-                query.timestamp.$gte = new Date(startDate);
-            }
-            if (endDate) {
-                query.timestamp.$lte = new Date(endDate);
-            }
-        }
-
-        const metrics = await CPUMetrics.find(query)
-            .sort({ timestamp: -1 })
-            .limit(100);
-
-        res.json({
-            success: true,
-            data: metrics
-        });
-    } catch (error) {
-        console.error('Error fetching CPU metrics:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch CPU metrics'
-        });
-    }
-});
-
-app.get('/api/cpu-metrics/:deviceId', async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        
-        // Use aggregation pipeline to calculate statistics
-        const stats = await CPUMetrics.aggregate([
-            { $match: { deviceId } },
-            {
-                $group: {
-                    _id: null,
-                    averageUsage: { $avg: "$usagePercentage" },
-                    minUsage: { $min: "$usagePercentage" },
-                    maxUsage: { $max: "$usagePercentage" },
-                    metrics: { $push: "$$ROOT" }
-                }
-            },
-            {
-                $project: {
-                    _id: 0,
-                    statistics: {
-                        averageUsage: { $round: ["$averageUsage", 2] },
-                        minUsage: { $round: ["$minUsage", 2] },
-                        maxUsage: { $round: ["$maxUsage", 2] }
-                    },
-                    metrics: {
-                        $slice: [
-                            { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
-                            100
-                        ]
-                    }
-                }
-            }
-        ]);
-
-        // Find the peak time (timestamp of maximum usage)
-        const peakTime = await CPUMetrics.findOne(
-            { deviceId, usagePercentage: stats[0]?.statistics.maxUsage },
-            { timestamp: 1 }
-        );
-
-        res.json({
-            success: true,
-            data: {
-                ...stats[0],
-                statistics: {
-                    ...stats[0]?.statistics,
-                    peakTime: peakTime?.timestamp
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Error fetching CPU metrics:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch CPU metrics'
-        });
-    }
-});
-
-
-app.get('/api/servers', async (req, res) => {
-    const servers = await Device.find();
-    res.json({
-        success: true,
-        data: servers
-    });
-})
-
 // Function to get memory usage
 function getMemoryUsage() {
     const totalMemory = os.totalmem();
@@ -213,101 +107,7 @@ const memoryMetricsSchema = new mongoose.Schema({
 // Create Memory Metrics Model
 const MemoryMetrics = mongoose.model('memory_metrics', memoryMetricsSchema);
 
-// API Endpoint to fetch memory metrics
-app.get('/api/memory-metrics', async (req, res) => {
-    try {
-        const { deviceId, startDate, endDate } = req.query;
-        let query = {};
 
-        if (deviceId) {
-            query.deviceId = deviceId;
-        }
-
-        if (startDate || endDate) {
-            query.timestamp = {};
-            if (startDate) {
-                query.timestamp.$gte = new Date(startDate);
-            }
-            if (endDate) {
-                query.timestamp.$lte = new Date(endDate);
-            }
-        }
-
-        const metrics = await MemoryMetrics.find(query)
-            .sort({ timestamp: -1 })
-            .limit(100);
-
-        res.json({
-            success: true,
-            data: metrics
-        });
-    } catch (error) {
-        console.error('Error fetching memory metrics:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch memory metrics'
-        });
-    }
-});
-
-app.get('/api/memory-metrics/:deviceId', async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        
-        // Use aggregation pipeline to calculate statistics
-        const stats = await MemoryMetrics.aggregate([
-            { $match: { deviceId } },
-            {
-                $group: {
-                    _id: null,
-                    averageUsage: { $avg: "$usagePercentage" },
-                    minUsage: { $min: "$usagePercentage" },
-                    maxUsage: { $max: "$usagePercentage" },
-                    metrics: { $push: "$$ROOT" }
-                }
-            },
-            {
-                $project: {
-                    _id: 0,
-                    statistics: {
-                        averageUsage: { $round: ["$averageUsage", 2] },
-                        minUsage: { $round: ["$minUsage", 2] },
-                        maxUsage: { $round: ["$maxUsage", 2] }
-                    },
-                    metrics: {
-                        $slice: [
-                            { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
-                            100
-                        ]
-                    }
-                }
-            }
-        ]);
-
-        // Find the peak time (timestamp of maximum usage)
-        const peakTime = await MemoryMetrics.findOne(
-            { deviceId, usagePercentage: stats[0]?.statistics.maxUsage },
-            { timestamp: 1 }
-        );
-
-        res.json({
-            success: true,
-            data: {
-                ...stats[0],
-                statistics: {
-                    ...stats[0]?.statistics,
-                    peakTime: peakTime?.timestamp
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Error fetching memory metrics:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to fetch memory metrics'
-        });
-    }
-});
 
 app.listen(port, async () => {
     console.log(`Server is listening on port ${port}`);
@@ -546,6 +346,9 @@ async function collectNetworkMetrics() {
     }
 }
 
+
+//////////////////////////////////////////////////////////////API ENDPOINTS//////////////////////////////////////////////////////////////
+
 // API Endpoint to fetch network metrics
 app.get('/api/network-metrics', async (req, res) => {
     try {
@@ -633,6 +436,208 @@ app.get('/api/network-metrics/:deviceId', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to fetch network metrics'
+        });
+    }
+});
+
+// API Endpoint to fetch CPU metrics
+app.get('/api/cpu-metrics', async (req, res) => {
+    try {
+        const { deviceId, startDate, endDate } = req.query;
+        let query = {};
+
+        if (deviceId) {
+            query.deviceId = deviceId;
+        }
+
+        // Add date range filter if provided
+        if (startDate || endDate) {
+            query.timestamp = {};
+            if (startDate) {
+                query.timestamp.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                query.timestamp.$lte = new Date(endDate);
+            }
+        }
+
+        const metrics = await CPUMetrics.find(query)
+            .sort({ timestamp: -1 })
+            .limit(100);
+
+        res.json({
+            success: true,
+            data: metrics
+        });
+    } catch (error) {
+        console.error('Error fetching CPU metrics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch CPU metrics'
+        });
+    }
+});
+
+app.get('/api/cpu-metrics/:deviceId', async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        
+        // Use aggregation pipeline to calculate statistics
+        const stats = await CPUMetrics.aggregate([
+            { $match: { deviceId } },
+            {
+                $group: {
+                    _id: null,
+                    averageUsage: { $avg: "$usagePercentage" },
+                    minUsage: { $min: "$usagePercentage" },
+                    maxUsage: { $max: "$usagePercentage" },
+                    metrics: { $push: "$$ROOT" }
+                }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    statistics: {
+                        averageUsage: { $round: ["$averageUsage", 2] },
+                        minUsage: { $round: ["$minUsage", 2] },
+                        maxUsage: { $round: ["$maxUsage", 2] }
+                    },
+                    metrics: {
+                        $slice: [
+                            { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
+                            100
+                        ]
+                    }
+                }
+            }
+        ]);
+
+        // Find the peak time (timestamp of maximum usage)
+        const peakTime = await CPUMetrics.findOne(
+            { deviceId, usagePercentage: stats[0]?.statistics.maxUsage },
+            { timestamp: 1 }
+        );
+
+        res.json({
+            success: true,
+            data: {
+                ...stats[0],
+                statistics: {
+                    ...stats[0]?.statistics,
+                    peakTime: peakTime?.timestamp
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching CPU metrics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch CPU metrics'
+        });
+    }
+});
+
+
+app.get('/api/servers', async (req, res) => {
+    const servers = await Device.find();
+    res.json({
+        success: true,
+        data: servers
+    });
+})
+
+// API Endpoint to fetch memory metrics
+app.get('/api/memory-metrics', async (req, res) => {
+    try {
+        const { deviceId, startDate, endDate } = req.query;
+        let query = {};
+
+        if (deviceId) {
+            query.deviceId = deviceId;
+        }
+
+        if (startDate || endDate) {
+            query.timestamp = {};
+            if (startDate) {
+                query.timestamp.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                query.timestamp.$lte = new Date(endDate);
+            }
+        }
+
+        const metrics = await MemoryMetrics.find(query)
+            .sort({ timestamp: -1 })
+            .limit(100);
+
+        res.json({
+            success: true,
+            data: metrics
+        });
+    } catch (error) {
+        console.error('Error fetching memory metrics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch memory metrics'
+        });
+    }
+});
+
+app.get('/api/memory-metrics/:deviceId', async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        
+        // Use aggregation pipeline to calculate statistics
+        const stats = await MemoryMetrics.aggregate([
+            { $match: { deviceId } },
+            {
+                $group: {
+                    _id: null,
+                    averageUsage: { $avg: "$usagePercentage" },
+                    minUsage: { $min: "$usagePercentage" },
+                    maxUsage: { $max: "$usagePercentage" },
+                    metrics: { $push: "$$ROOT" }
+                }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    statistics: {
+                        averageUsage: { $round: ["$averageUsage", 2] },
+                        minUsage: { $round: ["$minUsage", 2] },
+                        maxUsage: { $round: ["$maxUsage", 2] }
+                    },
+                    metrics: {
+                        $slice: [
+                            { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
+                            100
+                        ]
+                    }
+                }
+            }
+        ]);
+
+        // Find the peak time (timestamp of maximum usage)
+        const peakTime = await MemoryMetrics.findOne(
+            { deviceId, usagePercentage: stats[0]?.statistics.maxUsage },
+            { timestamp: 1 }
+        );
+
+        res.json({
+            success: true,
+            data: {
+                ...stats[0],
+                statistics: {
+                    ...stats[0]?.statistics,
+                    peakTime: peakTime?.timestamp
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching memory metrics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch memory metrics'
         });
     }
 });
