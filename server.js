@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const app = express()
 const port = 3000
+const intervalInSeconds = 60;
 
 // Enable CORS for all routes - allowing all origins
 app.use(cors());
@@ -115,7 +116,7 @@ app.listen(port, async () => {
     await sendDeviceDetails();
 
     collectDeviceDetails();
-    setInterval(collectDeviceDetails, 30000);
+    setInterval(collectDeviceDetails, intervalInSeconds * 1000);
 })
 
 
