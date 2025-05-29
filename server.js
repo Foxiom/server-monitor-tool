@@ -2,16 +2,152 @@ const express = require('express')
 const os = require('os');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const app = express()
 const port = 3000
 const intervalInSeconds = 60;
 
 // Enable CORS for all routes - allowing all origins
 app.use(cors());
+app.use(express.json());
+
+// JWT Secret Key
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
 // MongoDB Connection URL
 const MONGODB_URI = 'mongodb+srv://foxiomdevelopers:j86D1QXz6UYeH1Lq@testcluster.qqvseae.mongodb.net/server-monitor';
 
+// User Schema
+const userSchema = new mongoose.Schema({
+    email: {
+        type: String,
+        required: true,
+        unique: true,
+        trim: true,
+        lowercase: true
+    },
+    password: {
+        type: String,
+        required: true
+    },
+    role: {
+        type: String,
+        enum: ['admin'],
+        default: 'admin'
+    },
+    resetPasswordToken: String,
+    resetPasswordExpires: Date,
+    createdAt: {
+        type: Date,
+        default: Date.now
+    }
+});
+
+// Create User Model
+const User = mongoose.model('users', userSchema);
+
+// Helper function to extract Bearer token
+const extractBearerToken = (authHeader) => {
+    if (!authHeader) {
+        return null;
+    }
+
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+        return null;
+    }
+
+    return parts[1];
+};
+
+// Middleware to verify JWT token
+const authenticateToken = async (req, res, next) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const token = extractBearerToken(authHeader);
+
+        if (!token) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Authorization header must be in the format: Bearer <token>' 
+            });
+        }
+
+        const decoded = jwt.verify(token, JWT_SECRET);
+        const user = await User.findById(decoded.userId);
+        
+        if (!user) {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'User not found' 
+            });
+        }
+
+        req.user = user;
+        next();
+    } catch (error) {
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid token' 
+            });
+        }
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Token has expired' 
+            });
+        }
+        return res.status(403).json({ 
+            success: false, 
+            message: 'Authentication failed' 
+        });
+    }
+};
+
+// Connect to MongoDB
+async function connectToMongoDB() {
+    try {
+        await mongoose.connect(MONGODB_URI);
+        console.log('Connected to MongoDB successfully');
+        await initializeDefaultAdmin();
+    } catch (error) {
+        console.error('MongoDB connection error:', error);
+    }
+}
+
+// Initialize default admin user
+async function initializeDefaultAdmin() {
+    try {
+        const defaultAdminEmail = 'superadmin@gmail.com';
+        const defaultAdminPassword = '12345';
+
+        // Check if admin already exists
+        const existingAdmin = await User.findOne({ email: defaultAdminEmail });
+        if (existingAdmin) {
+            console.log('Default admin user already exists');
+            return;
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(defaultAdminPassword, salt);
+
+        // Create default admin user
+        const adminUser = new User({
+            email: defaultAdminEmail,
+            password: hashedPassword,
+            role: 'admin'
+        });
+
+        await adminUser.save();
+        console.log('Default admin user created successfully');
+    } catch (error) {
+        console.error('Error creating default admin user:', error);
+    }
+}
 
 async function sendDeviceDetails() {
     try {
@@ -26,7 +162,6 @@ async function sendDeviceDetails() {
         console.error('Error updating device details:', error);
     }
 }
-
 
 async function collectDeviceDetails() {
     try {
@@ -108,8 +243,6 @@ const memoryMetricsSchema = new mongoose.Schema({
 // Create Memory Metrics Model
 const MemoryMetrics = mongoose.model('memory_metrics', memoryMetricsSchema);
 
-
-
 app.listen(port, async () => {
     console.log(`Server is listening on port ${port}`);
     await connectToMongoDB();
@@ -118,8 +251,6 @@ app.listen(port, async () => {
     collectDeviceDetails();
     setInterval(collectDeviceDetails, intervalInSeconds * 1000);
 })
-
-
 
 function getDeviceDetails() {
     const deviceInfo = {
@@ -202,18 +333,6 @@ function getDeviceId() {
     }
     return 'unknown';
 }
-
-// Connect to MongoDB
-async function connectToMongoDB() {
-    try {
-        await mongoose.connect(MONGODB_URI);
-        console.log('Connected to MongoDB successfully');
-    } catch (error) {
-        console.error('MongoDB connection error:', error);
-    }
-}
-
-
 
 //SCHEMA
 
@@ -340,6 +459,200 @@ async function collectNetworkMetrics() {
     }
 }
 
+//////////////////////////////////////////////////////////////AUTH ENDPOINTS//////////////////////////////////////////////////////////////
+
+// Register Admin User
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // Check if user already exists
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                message: 'User already exists'
+            });
+        }
+
+        // Hash password
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Create new user
+        const user = new User({
+            email,
+            password: hashedPassword,
+            role: 'admin'
+        });
+
+        await user.save();
+
+        res.status(201).json({
+            success: true,
+            message: 'Admin user created successfully'
+        });
+    } catch (error) {
+        console.error('Error registering user:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error registering user'
+        });
+    }
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        // Find user
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid credentials'
+            });
+        }
+
+        // Verify password
+        const isValidPassword = await bcrypt.compare(password, user.password);
+        if (!isValidPassword) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid credentials'
+            });
+        }
+
+        // Generate JWT token
+        const token = jwt.sign(
+            { userId: user._id, role: user.role },
+            JWT_SECRET,
+            { expiresIn: '24h' }
+        );
+
+        res.json({
+            success: true,
+            token,
+            user: {
+                id: user._id,
+                email: user.email,
+                role: user.role
+            }
+        });
+    } catch (error) {
+        console.error('Error logging in:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error logging in'
+        });
+    }
+});
+
+// Request Password Reset
+app.post('/api/auth/forgot-password', async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        const user = await User.findOne({ email });
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Generate reset token
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        user.resetPasswordToken = resetToken;
+        user.resetPasswordExpires = Date.now() + 3600000; // Token expires in 1 hour
+        await user.save();
+
+        // In a real application, you would send this token via email
+        // For this example, we'll just return it in the response
+        res.json({
+            success: true,
+            message: 'Password reset token generated',
+            resetToken // In production, remove this and send via email instead
+        });
+    } catch (error) {
+        console.error('Error generating reset token:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error generating reset token'
+        });
+    }
+});
+
+// Reset Password
+app.post('/api/auth/reset-password', async (req, res) => {
+    try {
+        const { token, newPassword } = req.body;
+
+        const user = await User.findOne({
+            resetPasswordToken: token,
+            resetPasswordExpires: { $gt: Date.now() }
+        });
+
+        if (!user) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid or expired reset token'
+            });
+        }
+
+        // Hash new password
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
+        await user.save();
+
+        res.json({
+            success: true,
+            message: 'Password has been reset successfully'
+        });
+    } catch (error) {
+        console.error('Error resetting password:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error resetting password'
+        });
+    }
+});
+
+// Change Password (requires authentication)
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const user = req.user;
+
+        // Verify current password
+        const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+        if (!isValidPassword) {
+            return res.status(401).json({
+                success: false,
+                message: 'Current password is incorrect'
+            });
+        }
+
+        // Hash new password
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        await user.save();
+
+        res.json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+    } catch (error) {
+        console.error('Error changing password:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error changing password'
+        });
+    }
+});
 
 //////////////////////////////////////////////////////////////API ENDPOINTS//////////////////////////////////////////////////////////////
 
@@ -530,7 +843,6 @@ app.get('/api/cpu-metrics/:deviceId', async (req, res) => {
         });
     }
 });
-
 
 app.get('/api/servers', async (req, res) => {
     const servers = await Device.find();
