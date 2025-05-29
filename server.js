@@ -5,6 +5,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const si = require('systeminformation');
 const app = express()
 const port = 3000
 const intervalInSeconds = 60;
@@ -411,29 +412,16 @@ const NetworkMetrics = mongoose.model('network_metrics', networkMetricsSchema);
 // Function to get network statistics
 async function getNetworkStats() {
     try {
-        const interfaces = os.networkInterfaces();
-        const networkStats = [];
-
-        for (const [interfaceName, interfaceDetails] of Object.entries(interfaces)) {
-            // Skip loopback interface
-            if (interfaceName === 'lo') continue;
-
-            // Find IPv4 interface
-            const ipv4Interface = interfaceDetails.find(iface => iface.family === 'IPv4');
-            if (!ipv4Interface) continue;
-
-            const stats = {
-                interface: interfaceName,
-                bytesReceived: 0, // These metrics are not available through os.networkInterfaces()
-                bytesSent: 0,     // You might want to use a different approach to get these
-                packetsReceived: 0,
-                packetsSent: 0,
-                errorsReceived: 0,
-                errorsSent: 0
-            };
-            networkStats.push(stats);
-        }
-        return networkStats;
+        const networkStats = await si.networkStats();
+        return networkStats.map(stat => ({
+            interface: stat.iface,
+            bytesReceived: stat.rx_bytes,
+            bytesSent: stat.tx_bytes,
+            packetsReceived: stat.rx_packets,
+            packetsSent: stat.tx_packets,
+            errorsReceived: stat.rx_errors,
+            errorsSent: stat.tx_errors
+        }));
     } catch (error) {
         console.error('Error getting network statistics:', error);
         return [];
