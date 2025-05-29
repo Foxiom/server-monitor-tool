@@ -15,14 +15,39 @@ cleanup() {
 # Set up error handling
 trap cleanup ERR
 
-# Check if Node.js is installed
-if ! command -v node &> /dev/null; then
-  echo "❌ Node.js is not installed. Please install Node.js first."
-  exit 1
+# Function to check if a command exists
+command_exists() {
+  command -v "$1" &> /dev/null
+}
+
+# Function to install Node.js
+install_nodejs() {
+  echo "📦 Installing Node.js..."
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    brew install node
+  elif [[ -f /etc/debian_version ]]; then
+    # Debian/Ubuntu
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+  elif [[ -f /etc/redhat-release ]]; then
+    # RHEL/CentOS
+    curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+    sudo yum install -y nodejs
+  else
+    echo "❌ Unsupported operating system for automatic Node.js installation"
+    exit 1
+  fi
+}
+
+# Check and install Node.js if not present
+if ! command_exists node; then
+  echo "❌ Node.js is not installed."
+  install_nodejs
 fi
 
 # Check if PM2 is installed, if not install it globally
-if ! command -v pm2 &> /dev/null; then
+if ! command_exists pm2; then
   echo "📦 Installing PM2 globally..."
   npm install -g pm2
 fi
