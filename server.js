@@ -935,3 +935,28 @@ app.get('/api/memory-metrics/:deviceId', async (req, res) => {
         });
     }
 });
+
+// Get server by ID
+app.get('/api/servers/:id', authenticateToken, async (req, res) => {
+    try {
+        const server = await Device.findById(req.params.id);
+        
+        if (!server) {
+            return res.status(404).json({
+                success: false,
+                message: 'Server not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: server
+        });
+    } catch (error) {
+        console.error('Error fetching server:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching server details'
+        });
+    }
+});
