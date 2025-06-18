@@ -183,6 +183,7 @@ async function collectDeviceDetails() {
         
         await collectMemoryMetrics();
         await collectNetworkMetrics();
+        await collectDiskMetrics();
 
         console.log('Metrics collected and saved:', new Date().toISOString());
     } catch (error) {
@@ -244,6 +245,7 @@ const memoryMetricsSchema = new mongoose.Schema({
 // Create Memory Metrics Model
 const MemoryMetrics = mongoose.model('memory_metrics', memoryMetricsSchema);
 
+// Start the server
 app.listen(port, async () => {
     console.log(`Server is listening on port ${port}`);
     await connectToMongoDB();
@@ -251,7 +253,7 @@ app.listen(port, async () => {
 
     collectDeviceDetails();
     setInterval(collectDeviceDetails, intervalInSeconds * 1000);
-})
+});
 
 function getDeviceDetails() {
     const deviceInfo = {
@@ -268,6 +270,66 @@ function getDeviceDetails() {
 }
 
 // Function to calculate CPU usage
+
+// Function to get disk usage
+async function getDiskUsage() {
+    try {
+        const fsSize = await si.fsSize();
+        return fsSize;
+    } catch (error) {
+        console.error('Error getting disk usage:', error);
+        return [];
+    }
+}
+
+async function collectDiskMetrics() {
+    try {
+        const deviceId = getDeviceId();
+        const diskUsage = await getDiskUsage();
+
+        // Process each filesystem
+        for (const fs of diskUsage) {
+            const metrics = new DiskMetrics({
+                deviceId: deviceId,
+                filesystem: fs.fs,
+                size: fs.size,
+                used: fs.used,
+                available: fs.available,
+                mount: fs.mount,
+                usagePercentage: fs.use
+            });
+
+            await metrics.save();
+        }
+
+        console.log('Disk metrics collected and saved:', new Date().toISOString());
+    } catch (error) {
+        console.error('Error collecting disk metrics:', error);
+    }
+}
+
+// Disk Metrics Schema
+const diskMetricsSchema = new mongoose.Schema({
+    deviceId: {
+        type: String,
+        required: true
+    },
+    filesystem: String,
+    size: Number,
+    used: Number,
+    available: Number,
+    mount: String,
+    usagePercentage: Number,
+    timestamp: {
+        type: Date,
+        default: Date.now
+    }
+});
+
+// Create Disk Metrics Model
+const DiskMetrics = mongoose.model('disk_metrics', diskMetricsSchema);
+
+// Function to get CPU usage
 function getCPUUsage() {
     const cpus = os.cpus();
     let totalIdle = 0;
@@ -334,8 +396,6 @@ function getDeviceId() {
     }
     return 'unknown';
 }
-
-//SCHEMA
 
 // Device Schema
 const deviceSchema = new mongoose.Schema({
@@ -873,6 +933,102 @@ app.get('/api/memory-metrics', async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to fetch memory metrics'
+        });
+    }
+});
+
+// API Endpoint to fetch disk metrics
+app.get('/api/disk-metrics', async (req, res) => {
+    try {
+        const { deviceId, startDate, endDate } = req.query;
+        let query = {};
+
+        if (deviceId) {
+            query.deviceId = deviceId;
+        }
+
+        if (startDate || endDate) {
+            query.timestamp = {};
+            if (startDate) {
+                query.timestamp.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                query.timestamp.$lte = new Date(endDate);
+            }
+        }
+
+        const metrics = await DiskMetrics.find(query)
+            .sort({ timestamp: -1 })
+            .limit(100);
+
+        res.json({
+            success: true,
+            data: metrics
+        });
+    } catch (error) {
+        console.error('Error fetching disk metrics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch disk metrics'
+        });
+    }
+});
+
+// API Endpoint to fetch disk metrics by device ID
+app.get('/api/disk-metrics/:deviceId', async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        
+        // Use aggregation pipeline to calculate statistics
+        const stats = await DiskMetrics.aggregate([
+            { $match: { deviceId } },
+            {
+                $group: {
+                    _id: {
+                        filesystem: "$filesystem",
+                        mount: "$mount"
+                    },
+                    averageUsage: { $avg: "$usagePercentage" },
+                    minUsage: { $min: "$usagePercentage" },
+                    maxUsage: { $max: "$usagePercentage" },
+                    totalSize: { $first: "$size" },
+                    averageUsed: { $avg: "$used" },
+                    averageAvailable: { $avg: "$available" },
+                    metrics: { $push: "$$ROOT" }
+                }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    filesystem: "$_id.filesystem",
+                    mount: "$_id.mount",
+                    statistics: {
+                        averageUsage: { $round: ["$averageUsage", 2] },
+                        minUsage: { $round: ["$minUsage", 2] },
+                        maxUsage: { $round: ["$maxUsage", 2] },
+                        totalSize: 1,
+                        averageUsed: { $round: ["$averageUsed", 0] },
+                        averageAvailable: { $round: ["$averageAvailable", 0] }
+                    },
+                    metrics: {
+                        $slice: [
+                            { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
+                            10
+                        ]
+                    }
+                }
+            }
+        ]);
+
+        res.json({
+            success: true,
+            data: stats
+        });
+    } catch (error) {
+        console.error('Error fetching disk metrics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch disk metrics'
         });
     }
 });
