@@ -895,7 +895,12 @@ app.get('/api/cpu-metrics/:deviceId', async (req, res) => {
 app.get('/api/servers', async (req, res) => {
     try {
         // Get all servers
-        const servers = await Device.find();
+        const conditions = {};
+        if(req.query.deviceIds){
+            const deviceIds = req.query.deviceIds.split(',');
+            conditions.deviceId = { $in: deviceIds };
+        }
+        const servers = await Device.find(conditions);
         const serversWithMetrics = [];
         
         // For each server, get the latest metrics
