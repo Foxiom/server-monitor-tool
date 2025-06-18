@@ -1155,6 +1155,94 @@ app.get('/api/memory-metrics/:deviceId', async (req, res) => {
     }
 });
 
+// API Endpoint to get server status counts and categorized device IDs
+app.get('/api/server-status', async (req, res) => {
+    try {
+        // Get all servers with their metrics
+        const servers = await Device.find();
+        
+        // Initialize status categories
+        const statusCategories = {
+            up: { count: 0, deviceIds: [] },
+            trouble: { count: 0, deviceIds: [] },
+            critical: { count: 0, deviceIds: [] },
+            down: { count: 0, deviceIds: [] }
+        };
+        
+        // Set threshold time for determining if a server is down (no data in last 5 minutes)
+        const thresholdTime = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes ago
+        
+        // Process each server
+        for (const server of servers) {
+            const deviceId = server.deviceId;
+            
+            // Get latest metrics
+            const latestCpuMetric = await CPUMetrics.findOne({ deviceId })
+                .sort({ timestamp: -1 })
+                .limit(1);
+                
+            const latestMemoryMetric = await MemoryMetrics.findOne({ deviceId })
+                .sort({ timestamp: -1 })
+                .limit(1);
+                
+            const diskMetrics = await DiskMetrics.aggregate([
+                { $match: { deviceId } },
+                { $sort: { timestamp: -1 } },
+                { $group: {
+                    _id: "$filesystem",
+                    latestMetric: { $first: "$$ROOT" }
+                }},
+                { $replaceRoot: { newRoot: "$latestMetric" } }
+            ]);
+            
+            // Check if server is down (no recent data)
+            const latestTimestamp = latestCpuMetric?.timestamp || latestMemoryMetric?.timestamp || 
+                                   (diskMetrics.length > 0 ? diskMetrics[0].timestamp : null);
+            
+            if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
+                statusCategories.down.count++;
+                statusCategories.down.deviceIds.push(deviceId);
+                continue;
+            }
+            
+            // Get usage percentages
+            const cpuUsage = latestCpuMetric ? parseFloat(latestCpuMetric.usagePercentage) : 0;
+            const memoryUsage = latestMemoryMetric ? parseFloat(latestMemoryMetric.usagePercentage) : 0;
+            
+            // Calculate max disk usage
+            let maxDiskUsage = 0;
+            if (diskMetrics.length > 0) {
+                maxDiskUsage = Math.max(...diskMetrics.map(disk => disk.usagePercentage || 0));
+            }
+            
+            // Determine status based on highest usage
+            const maxUsage = Math.max(cpuUsage, memoryUsage, maxDiskUsage);
+            
+            if (maxUsage >= 90) {
+                statusCategories.critical.count++;
+                statusCategories.critical.deviceIds.push(deviceId);
+            } else if (maxUsage >= 80) {
+                statusCategories.trouble.count++;
+                statusCategories.trouble.deviceIds.push(deviceId);
+            } else {
+                statusCategories.up.count++;
+                statusCategories.up.deviceIds.push(deviceId);
+            }
+        }
+        
+        res.json({
+            success: true,
+            data: statusCategories
+        });
+    } catch (error) {
+        console.error('Error fetching server status counts:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch server status counts'
+        });
+    }
+});
+
 // Get server by ID
 app.get('/api/servers/:id', authenticateToken, async (req, res) => {
     try {
