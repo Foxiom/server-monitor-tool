@@ -893,11 +893,65 @@ app.get('/api/cpu-metrics/:deviceId', async (req, res) => {
 });
 
 app.get('/api/servers', async (req, res) => {
-    const servers = await Device.find();
-    res.json({
-        success: true,
-        data: servers
-    });
+    try {
+        // Get all servers
+        const servers = await Device.find();
+        const serversWithMetrics = [];
+        
+        // For each server, get the latest metrics
+        for (const server of servers) {
+            const deviceId = server.deviceId;
+            const serverData = server.toObject();
+            
+            // Get latest CPU metrics
+            const latestCpuMetric = await CPUMetrics.findOne({ deviceId })
+                .sort({ timestamp: -1 })
+                .limit(1);
+            
+            // Get latest memory metrics
+            const latestMemoryMetric = await MemoryMetrics.findOne({ deviceId })
+                .sort({ timestamp: -1 })
+                .limit(1);
+            
+            // Get latest disk metrics (average of all disks)
+            const diskMetrics = await DiskMetrics.aggregate([
+                { $match: { deviceId } },
+                { $sort: { timestamp: -1 } },
+                { $group: {
+                    _id: "$filesystem",
+                    latestMetric: { $first: "$$ROOT" }
+                }},
+                { $replaceRoot: { newRoot: "$latestMetric" } }
+            ]);
+            
+            // Calculate average disk usage if there are multiple disks
+            let avgDiskUsage = 0;
+            if (diskMetrics.length > 0) {
+                avgDiskUsage = diskMetrics.reduce((sum, disk) => sum + disk.usagePercentage, 0) / diskMetrics.length;
+            }
+            
+            // Add metrics to server data
+            serverData.metrics = {
+                cpu: latestCpuMetric ? parseFloat(latestCpuMetric.usagePercentage) : null,
+                memory: latestMemoryMetric ? parseFloat(latestMemoryMetric.usagePercentage) : null,
+                disk: diskMetrics.length > 0 ? parseFloat(avgDiskUsage.toFixed(2)) : null,
+                lastUpdated: latestCpuMetric ? latestCpuMetric.timestamp : null
+            };
+            
+            serversWithMetrics.push(serverData);
+        }
+        
+        res.json({
+            success: true,
+            data: serversWithMetrics
+        });
+    } catch (error) {
+        console.error('Error fetching servers with metrics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch servers with metrics'
+        });
+    }
 })
 
 // API Endpoint to fetch memory metrics
