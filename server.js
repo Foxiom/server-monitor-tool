@@ -979,50 +979,59 @@ app.get('/api/disk-metrics/:deviceId', async (req, res) => {
     try {
         const { deviceId } = req.params;
         
-        // Use aggregation pipeline to calculate statistics
+        // Get overall statistics across all disks
         const stats = await DiskMetrics.aggregate([
             { $match: { deviceId } },
             {
                 $group: {
-                    _id: {
-                        filesystem: "$filesystem",
-                        mount: "$mount"
-                    },
+                    _id: null,
                     averageUsage: { $avg: "$usagePercentage" },
                     minUsage: { $min: "$usagePercentage" },
-                    maxUsage: { $max: "$usagePercentage" },
-                    totalSize: { $first: "$size" },
-                    averageUsed: { $avg: "$used" },
-                    averageAvailable: { $avg: "$available" },
-                    metrics: { $push: "$$ROOT" }
+                    maxUsage: { $max: "$usagePercentage" }
                 }
             },
             {
                 $project: {
                     _id: 0,
-                    filesystem: "$_id.filesystem",
-                    mount: "$_id.mount",
-                    statistics: {
-                        averageUsage: { $round: ["$averageUsage", 2] },
-                        minUsage: { $round: ["$minUsage", 2] },
-                        maxUsage: { $round: ["$maxUsage", 2] },
-                        totalSize: 1,
-                        averageUsed: { $round: ["$averageUsed", 0] },
-                        averageAvailable: { $round: ["$averageAvailable", 0] }
-                    },
-                    metrics: {
-                        $slice: [
-                            { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
-                            10
-                        ]
-                    }
+                    averageUsage: { $round: ["$averageUsage", 2] },
+                    minUsage: { $round: ["$minUsage", 2] },
+                    maxUsage: { $round: ["$maxUsage", 2] }
                 }
+            }
+        ]);
+
+        // Find the peak time (timestamp of maximum usage)
+        const peakTime = await DiskMetrics.findOne(
+            { deviceId, usagePercentage: stats[0]?.maxUsage },
+            { timestamp: 1 }
+        );
+        
+        // Get the latest metrics for each filesystem
+        const latestMetricsByFilesystem = await DiskMetrics.aggregate([
+            { $match: { deviceId } },
+            {
+                $sort: { timestamp: -1 }
+            },
+            {
+                $group: {
+                    _id: "$filesystem",
+                    latestMetric: { $first: "$$ROOT" }
+                }
+            },
+            {
+                $replaceRoot: { newRoot: "$latestMetric" }
             }
         ]);
 
         res.json({
             success: true,
-            data: stats
+            data: {
+                statistics: {
+                    ...stats[0],
+                    peakTime: peakTime?.timestamp
+                },
+                metrics: latestMetricsByFilesystem
+            }
         });
     } catch (error) {
         console.error('Error fetching disk metrics:', error);
