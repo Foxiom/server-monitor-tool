@@ -1251,7 +1251,7 @@ app.get('/api/server-status', async (req, res) => {
 // Get server by ID
 app.get('/api/servers/:id', authenticateToken, async (req, res) => {
     try {
-        const server = await Device.findById(req.params.id);
+    const server = await Device.findOne({$or: [{ deviceId: req.params.id }, { _id: req.params.id }] });
         
         if (!server) {
             return res.status(404).json({

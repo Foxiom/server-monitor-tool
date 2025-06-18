@@ -1,0 +1,16 @@
+{
+    "name": "posting-server",
+    "version": "1.0.0",
+    "description": "Server for collecting and posting system metrics",
+    "main": "server.js",
+    "scripts": {
+      "start": "node server.js"
+    },
+    "dependencies": {
+      "bcryptjs": "^2.4.3",
+      "express": "^4.17.1",
+      "jsonwebtoken": "^9.0.0",
+      "mongoose": "^6.0.0",
+      "systeminformation": "^5.9.0"
+    }
+  }
