@@ -12,6 +12,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Create monitor-tool folder if it doesn't exist
+        run: |
+          mkdir -p monitor-tool
+          # Optionally add some default files
+          echo "This is a placeholder file" > monitor-tool/placeholder.txt
+        working-directory: ./posting_server
+
+      - name: Debug directory contents
+        run: |
+          ls -R
+        working-directory: ./posting_server
+
       - name: Create ZIP file
         run: |
           zip -r monitor-tool.zip monitor-tool
