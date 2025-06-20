@@ -21,4 +21,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: monitor-tool
-          path: monitor-tool.zip
+          path: posting_server/monitor-tool.zip
