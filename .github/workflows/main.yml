@@ -14,7 +14,7 @@ jobs:
 
       - name: Create ZIP file
         run: |
-          zip -r my-folder.zip my-folder
+          zip -r monitor-tool.zip monitor-tool
         working-directory: ./posting_server
 
       - name: Upload ZIP artifact
