@@ -1,77 +1,155 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal EnableDelayedExpansion
 
-:: Check if Node.js is installed
-where node >nul 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Node.js is not installed. Please install Node.js first.
+:: Display header
+echo ==================================================
+echo Setting up Posting Server
+echo ==================================================
+
+:: Function to check if a command exists
+:command_exists
+where %1 >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    exit /b 0
+) else (
     exit /b 1
 )
 
-:: Check if PM2 is installed, if not install it globally
-where pm2 >nul 2>nul
+:: Check for Node.js
+call :command_exists node
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Node.js is not installed. Please install Node.js from https://nodejs.org/ and add it to PATH.
+    exit /b 1
+)
+echo ✅ Node.js is installed.
+
+:: Check for Git
+call :command_exists git
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Git is not installed. Please install Git from https://git-scm.com/ and add it to PATH.
+    exit /b 1
+)
+echo ✅ Git is installed.
+
+:: Check for PM2, install if missing
+call :command_exists pm2
 if %ERRORLEVEL% neq 0 (
     echo 📦 Installing PM2 globally...
-    call npm install -g pm2
+    npm install -g pm2
+    if %ERRORLEVEL% neq 0 (
+        echo ❌ Failed to install PM2.
+        exit /b 1
+    )
+)
+echo ✅ PM2 is installed.
+
+:: Remove existing posting_server directory if it exists
+if exist posting_server (
+    echo 🗑️ Removing existing posting_server directory...
+    rmdir /s /q posting_server
+    if %ERRORLEVEL% neq 0 (
+        echo ❌ Failed to remove posting_server directory.
+        exit /b 1
+    )
 )
 
-:: Remove existing monitor-tool directory if it exists
-if exist "monitor-tool" (
-    echo 🗑️  Removing existing monitor-tool directory...
-    rmdir /s /q monitor-tool
+:: Create logs directory
+if not exist logs (
+    echo 📁 Creating logs directory...
+    mkdir logs
+    if %ERRORLEVEL% neq 0 (
+        echo ❌ Failed to create logs directory.
+        exit /b 1
+    )
 )
 
-:: Create app directory
-mkdir monitor-tool
-cd monitor-tool
+:: Clone the repository to a temporary directory
+echo ⬇️ Downloading posting_server from GitHub...
+set "TEMP_DIR=%TEMP%\server-monitor-tool-%RANDOM%"
+git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git "%TEMP_DIR%"
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to clone repository.
+    rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+    exit /b 1
+)
 
-:: Add timestamp to prevent caching
-for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set datetime=%%I
-set TIMESTAMP=%datetime:~0,14%
+:: Copy posting_server folder
+echo 📂 Copying posting_server folder...
+xcopy /E /I /Y "%TEMP_DIR%\posting_server" posting_server
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to copy posting_server folder.
+    rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+    exit /b 1
+)
 
-:: Download server.js
-echo ⬇️ Downloading server.js...
-curl -H "Cache-Control: no-cache, no-store, must-revalidate" -H "Pragma: no-cache" -H "Expires: 0" ^
-     -o server.js "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/server.js?t=%TIMESTAMP%"
+:: Clean up temporary directory
+rmdir /s /q "%TEMP_DIR%"
+if %ERRORLEVEL% neq 0 (
+    echo ⚠️ Warning: Failed to clean up temporary directory.
+)
 
-:: Download package.json
-echo ⬇️ Downloading package.json...
-curl -H "Cache-Control: no-cache, no-store, must-revalidate" -H "Pragma: no-cache" -H "Expires: 0" ^
-     -o package.json "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/package.json?t=%TIMESTAMP%"
+:: Navigate to posting_server directory
+cd posting_server
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to navigate to posting_server directory.
+    exit /b 1
+)
 
 :: Install dependencies
-echo 📦 Installing dependencies...
-call npm install
+echo 📦 Installing posting server dependencies...
+npm install
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to install dependencies.
+    exit /b 1
+)
 
-:: Create logs directory if it doesn't exist
-cd ..
-if not exist "logs" mkdir logs
-cd monitor-tool
-
-:: Set appropriate permissions
+:: Set permissions (Windows equivalent: ensure files are writable)
 echo 🔒 Setting up permissions...
-:: Grant full control to current user
-icacls "..\logs" /grant "%USERNAME%:(OI)(CI)F" /T
-icacls "." /grant "%USERNAME%:(OI)(CI)F" /T
-icacls "server.js" /grant "%USERNAME%:F"
-icacls "package.json" /grant "%USERNAME%:F"
-if exist "package-lock.json" icacls "package-lock.json" /grant "%USERNAME%:F"
-icacls "node_modules" /grant "%USERNAME%:(OI)(CI)F" /T
+:: Grant full control to current user for posting_server and logs
+icacls . /grant "%USERNAME%:F" /T >nul
+icacls ..\logs /grant "%USERNAME%:F" /T >nul
+if %ERRORLEVEL% neq 0 (
+    echo ⚠️ Warning: Failed to set permissions. Continuing...
+)
 
-:: Start the server using PM2
-echo 🚀 Starting server with PM2...
-call pm2 start server.js --name "server-monitor" --log ../logs/server.log
+:: Start the server with PM2
+echo 🚀 Starting posting server with PM2...
+pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to start server with PM2.
+    exit /b 1
+)
 
 :: Save PM2 process list
-call pm2 save
+pm2 save
+if %ERRORLEVEL% neq 0 (
+    echo ⚠️ Warning: Failed to save PM2 process list.
+)
 
 :: Setup PM2 to start on system boot
 echo 🔧 Setting up PM2 to start on system boot...
-call pm2 startup
+pm2 startup
+if %ERRORLEVEL% neq 0 (
+    echo ⚠️ Warning: Failed to set up PM2 for system boot.
+)
 
+:: Display success message
+echo.
 echo ✅ Server started and configured to run on system boot!
+echo 📁 Downloaded complete posting server with all folders:
+echo    - config/
+echo    - models/
+echo    - utils/
+echo    - server.js
+echo    - package.json
+echo.
 echo To manage the server, use these PM2 commands:
-echo   - pm2 status          # Check server status
-echo   - pm2 logs           # View logs
-echo   - pm2 stop all       # Stop the server
-echo   - pm2 restart all    # Restart the server 
+echo   - pm2 status              # Check server status
+echo   - pm2 logs                # View all logs
+echo   - pm2 logs posting-server # View posting server logs
+echo   - pm2 stop all           # Stop the server
+echo   - pm2 restart all        # Restart the server
+echo.
+
+endlocal
+pause
