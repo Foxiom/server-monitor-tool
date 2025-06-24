@@ -9,6 +9,9 @@ cleanup() {
     echo "❌ An error occurred. Cleaning up..."
     rm -rf posting_server
   fi
+  if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+    rm -rf "$TEMP_DIR"
+  fi
   exit 1
 }
 
@@ -40,10 +43,35 @@ install_nodejs() {
   fi
 }
 
+# Function to install Git
+install_git() {
+  echo "📦 Installing Git..."
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    brew install git
+  elif [[ -f /etc/debian_version ]]; then
+    # Debian/Ubuntu
+    sudo apt-get update
+    sudo apt-get install -y git
+  elif [[ -f /etc/redhat-release ]]; then
+    # RHEL/CentOS
+    sudo yum install -y git
+  else
+    echo "❌ Unsupported operating system for automatic Git installation"
+    exit 1
+  fi
+}
+
 # Check and install Node.js if not present
 if ! command_exists node; then
   echo "❌ Node.js is not installed."
   install_nodejs
+fi
+
+# Check and install Git if not present
+if ! command_exists git; then
+  echo "❌ Git is not installed."
+  install_git
 fi
 
 # Check if PM2 is installed, if not install it globally
@@ -61,29 +89,22 @@ fi
 # Create logs directory if it doesn't exist
 mkdir -p logs
 
-# Add timestamp to prevent caching
-TIMESTAMP=$(date +%s)
-
-# Common headers for curl to prevent caching
-CURL_HEADERS=(
-  "Cache-Control: no-cache, no-store, must-revalidate"
-  "Pragma: no-cache"
-  "Expires: 0"
-)
-
 # Setup posting server
 echo "🔧 Setting up posting server..."
-mkdir -p posting_server && cd posting_server
 
-# Download posting server.js
-echo "⬇️ Downloading posting server.js..."
-curl -H "${CURL_HEADERS[0]}" -H "${CURL_HEADERS[1]}" -H "${CURL_HEADERS[2]}" \
-     -o server.js "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/server.js?t=$TIMESTAMP"
+# Clone the repository to a temporary directory (shallow clone for efficiency)
+echo "⬇️ Downloading complete posting server from GitHub..."
+TEMP_DIR=$(mktemp -d)
+git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git "$TEMP_DIR"
 
-# Download posting server package.json
-echo "⬇️ Downloading posting server package.json..."
-curl -H "${CURL_HEADERS[0]}" -H "${CURL_HEADERS[1]}" -H "${CURL_HEADERS[2]}" \
-     -o package.json "https://raw.githubusercontent.com/Foxiom/server-monitor-tool/main/package.json?t=$TIMESTAMP"
+# Copy only the posting_server folder to our target location
+cp -r "$TEMP_DIR/posting_server" .
+
+# Clean up temporary directory
+rm -rf "$TEMP_DIR"
+
+# Navigate to posting_server directory
+cd posting_server
 
 # Install posting server dependencies
 echo "📦 Installing posting server dependencies..."
@@ -92,10 +113,9 @@ npm install
 # Set posting server permissions
 echo "🔒 Setting up permissions..."
 chmod 755 .
-chmod 644 server.js
-chmod 644 package.json
-chmod 644 package-lock.json 2>/dev/null || true
-chmod -R 755 node_modules
+find . -type f -name "*.js" -exec chmod 644 {} \;
+find . -type f -name "*.json" -exec chmod 644 {} \;
+find . -type d -exec chmod 755 {} \;
 chmod 755 ../logs
 
 # Start the server using PM2
@@ -110,6 +130,13 @@ echo "🔧 Setting up PM2 to start on system boot..."
 pm2 startup
 
 echo "✅ Server started and configured to run on system boot!"
+echo "📁 Downloaded complete posting server with all folders:"
+echo "   - config/"
+echo "   - models/"
+echo "   - utils/"
+echo "   - server.js"
+echo "   - package.json"
+echo ""
 echo "To manage the server, use these PM2 commands:"
 echo "  - pm2 status              # Check server status"
 echo "  - pm2 logs                # View all logs"
