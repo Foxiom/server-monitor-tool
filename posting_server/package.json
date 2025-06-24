@@ -11,6 +11,7 @@
       "express": "^4.17.1",
       "jsonwebtoken": "^9.0.0",
       "mongoose": "^6.0.0",
-      "systeminformation": "^5.9.0"
+      "systeminformation": "^5.9.0",
+      "cors": "^2.8.5"
     }
   }
