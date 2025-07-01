@@ -1,17 +1,16 @@
-const express = require('express');
-const Device = require('../models/Device');
-const CPUMetrics = require('../models/CPUMetrics');
-const MemoryMetrics = require('../models/MemoryMetrics');
-const DiskMetrics = require('../models/DiskMetrics');
-const NetworkMetrics = require('../models/NetworkMetrics');
-const authenticateToken = require('../middleware/auth');
+const express = require("express");
+const Device = require("../models/Device");
+const CPUMetrics = require("../models/CPUMetrics");
+const MemoryMetrics = require("../models/MemoryMetrics");
+const DiskMetrics = require("../models/DiskMetrics");
+const NetworkMetrics = require("../models/NetworkMetrics");
+const authenticateToken = require("../middleware/auth");
 
 const router = express.Router();
 
 // Fetch network metrics
-router.get('/network-metrics', authenticateToken, async (req, res) => {
+router.get("/network-metrics", authenticateToken, async (req, res) => {
   try {
-    
     const { deviceId, startDate, endDate } = req.query;
     let query = {};
 
@@ -35,72 +34,78 @@ router.get('/network-metrics', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      data: metrics
+      data: metrics,
     });
   } catch (error) {
-    console.error('Error fetching network metrics:', error);
+    console.error("Error fetching network metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch network metrics'
+      error: "Failed to fetch network metrics",
     });
   }
 });
 
-router.get('/network-metrics/:deviceId', authenticateToken, async (req, res) => {
-  try {
-    const { deviceId } = req.params;
+router.get(
+  "/network-metrics/:deviceId",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { deviceId } = req.params;
 
-    const stats = await NetworkMetrics.aggregate([
-      { $match: { deviceId } },
-      {
-        $group: {
-          _id: "$interface",
-          totalBytesReceived: { $sum: "$bytesReceived" },
-          totalBytesSent: { $sum: "$bytesSent" },
-          totalPacketsReceived: { $sum: "$packetsReceived" },
-          totalPacketsSent: { $sum: "$packetsSent" },
-          totalErrorsReceived: { $sum: "$errorsReceived" },
-          totalErrorsSent: { $sum: "$errorsSent" },
-          metrics: { $push: "$$ROOT" }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          interface: "$_id",
-          statistics: {
-            totalBytesReceived: 1,
-            totalBytesSent: 1,
-            totalPacketsReceived: 1,
-            totalPacketsSent: 1,
-            totalErrorsReceived: 1,
-            totalErrorsSent: 1
+      const stats = await NetworkMetrics.aggregate([
+        { $match: { deviceId } },
+        {
+          $group: {
+            _id: "$interface",
+            totalBytesReceived: { $sum: "$bytesReceived" },
+            totalBytesSent: { $sum: "$bytesSent" },
+            totalPacketsReceived: { $sum: "$packetsReceived" },
+            totalPacketsSent: { $sum: "$packetsSent" },
+            totalErrorsReceived: { $sum: "$errorsReceived" },
+            totalErrorsSent: { $sum: "$errorsSent" },
+            metrics: { $push: "$$ROOT" },
           },
-          metrics: {
-            $slice: [
-              { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
-              100
-            ]
-          }
-        }
-      }
-    ]);
+        },
+        {
+          $project: {
+            _id: 0,
+            interface: "$_id",
+            statistics: {
+              totalBytesReceived: 1,
+              totalBytesSent: 1,
+              totalPacketsReceived: 1,
+              totalPacketsSent: 1,
+              totalErrorsReceived: 1,
+              totalErrorsSent: 1,
+            },
+            metrics: {
+              $slice: [
+                {
+                  $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } },
+                },
+                100,
+              ],
+            },
+          },
+        },
+      ]);
 
-    res.json({
-      success: true,
-      data: stats
-    });
-  } catch (error) {
-    console.error('Error fetching network metrics:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch network metrics'
-    });
+      res.json({
+        success: true,
+        data: stats,
+      });
+    } catch (error) {
+      console.error("Error fetching network metrics:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch network metrics",
+      });
+    }
   }
-});
+);
 
 // Fetch CPU metrics
-router.get('/cpu-metrics', authenticateToken, async (req, res) => {
+router.get("/cpu-metrics", authenticateToken, async (req, res) => {
   try {
     const { deviceId, startDate, endDate } = req.query;
     let query = {};
@@ -125,18 +130,18 @@ router.get('/cpu-metrics', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      data: metrics
+      data: metrics,
     });
   } catch (error) {
-    console.error('Error fetching CPU metrics:', error);
+    console.error("Error fetching CPU metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch CPU metrics'
+      error: "Failed to fetch CPU metrics",
     });
   }
 });
 
-router.get('/cpu-metrics/:deviceId', authenticateToken, async (req, res) => {
+router.get("/cpu-metrics/:deviceId", authenticateToken, async (req, res) => {
   try {
     const { deviceId } = req.params;
 
@@ -148,8 +153,8 @@ router.get('/cpu-metrics/:deviceId', authenticateToken, async (req, res) => {
           averageUsage: { $avg: "$usagePercentage" },
           minUsage: { $min: "$usagePercentage" },
           maxUsage: { $max: "$usagePercentage" },
-          metrics: { $push: "$$ROOT" }
-        }
+          metrics: { $push: "$$ROOT" },
+        },
       },
       {
         $project: {
@@ -157,16 +162,16 @@ router.get('/cpu-metrics/:deviceId', authenticateToken, async (req, res) => {
           statistics: {
             averageUsage: { $round: ["$averageUsage", 2] },
             minUsage: { $round: ["$minUsage", 2] },
-            maxUsage: { $round: ["$maxUsage", 2] }
+            maxUsage: { $round: ["$maxUsage", 2] },
           },
           metrics: {
             $slice: [
               { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
-              100
-            ]
-          }
-        }
-      }
+              100,
+            ],
+          },
+        },
+      },
     ]);
 
     const peakTime = await CPUMetrics.findOne(
@@ -180,25 +185,25 @@ router.get('/cpu-metrics/:deviceId', authenticateToken, async (req, res) => {
         ...stats[0],
         statistics: {
           ...stats[0]?.statistics,
-          peakTime: peakTime?.timestamp
-        }
-      }
+          peakTime: peakTime?.timestamp,
+        },
+      },
     });
   } catch (error) {
-    console.error('Error fetching CPU metrics:', error);
+    console.error("Error fetching CPU metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch CPU metrics'
+      error: "Failed to fetch CPU metrics",
     });
   }
 });
 
 // Fetch servers
-router.get('/servers', authenticateToken, async (req, res) => {
+router.get("/servers", authenticateToken, async (req, res) => {
   try {
     const conditions = {};
     if (req.query.deviceIds) {
-      const deviceIds = req.query.deviceIds.split(',');
+      const deviceIds = req.query.deviceIds.split(",");
       conditions.deviceId = { $in: deviceIds };
     }
     const servers = await Device.find(conditions);
@@ -222,22 +227,29 @@ router.get('/servers', authenticateToken, async (req, res) => {
         {
           $group: {
             _id: "$filesystem",
-            latestMetric: { $first: "$$ROOT" }
-          }
+            latestMetric: { $first: "$$ROOT" },
+          },
         },
-        { $replaceRoot: { newRoot: "$latestMetric" } }
+        { $replaceRoot: { newRoot: "$latestMetric" } },
       ]);
 
       let avgDiskUsage = 0;
       if (diskMetrics.length > 0) {
-        avgDiskUsage = diskMetrics.reduce((sum, disk) => sum + disk.usagePercentage, 0) / diskMetrics.length;
+        avgDiskUsage =
+          diskMetrics.reduce((sum, disk) => sum + disk.usagePercentage, 0) /
+          diskMetrics.length;
       }
 
       serverData.metrics = {
-        cpu: latestCpuMetric ? parseFloat(latestCpuMetric.usagePercentage) : null,
-        memory: latestMemoryMetric ? parseFloat(latestMemoryMetric.usagePercentage) : null,
-        disk: diskMetrics.length > 0 ? parseFloat(avgDiskUsage.toFixed(2)) : null,
-        lastUpdated: latestCpuMetric ? latestCpuMetric.timestamp : null
+        cpu: latestCpuMetric
+          ? parseFloat(latestCpuMetric.usagePercentage)
+          : null,
+        memory: latestMemoryMetric
+          ? parseFloat(latestMemoryMetric.usagePercentage)
+          : null,
+        disk:
+          diskMetrics.length > 0 ? parseFloat(avgDiskUsage.toFixed(2)) : null,
+        lastUpdated: latestCpuMetric ? latestCpuMetric.timestamp : null,
       };
 
       serversWithMetrics.push(serverData);
@@ -245,44 +257,46 @@ router.get('/servers', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      data: serversWithMetrics
+      data: serversWithMetrics,
     });
   } catch (error) {
-    console.error('Error fetching servers with metrics:', error);
+    console.error("Error fetching servers with metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch servers with metrics'
+      error: "Failed to fetch servers with metrics",
     });
   }
 });
 
 // Fetch server by ID
-router.get('/servers/:id', authenticateToken, async (req, res) => {
+router.get("/servers/:id", authenticateToken, async (req, res) => {
   try {
-    const server = await Device.findOne({$or: [{ deviceId: req.params.id }, { _id: req.params.id }] });
+    const server = await Device.findOne({
+      $or: [{ deviceId: req.params.id }, { _id: req.params.id }],
+    });
 
     if (!server) {
       return res.status(404).json({
         success: false,
-        message: 'Server not found'
+        message: "Server not found",
       });
     }
 
     res.json({
       success: true,
-      data: server
+      data: server,
     });
   } catch (error) {
-    console.error('Error fetching server:', error);
+    console.error("Error fetching server:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching server details'
+      message: "Error fetching server details",
     });
   }
 });
 
 // Fetch memory metrics
-router.get('/memory-metrics', authenticateToken, async (req, res) => {
+router.get("/memory-metrics", authenticateToken, async (req, res) => {
   try {
     const { deviceId, startDate, endDate } = req.query;
     let query = {};
@@ -307,18 +321,18 @@ router.get('/memory-metrics', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      data: metrics
+      data: metrics,
     });
   } catch (error) {
-    console.error('Error fetching memory metrics:', error);
+    console.error("Error fetching memory metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch memory metrics'
+      error: "Failed to fetch memory metrics",
     });
   }
 });
 
-router.get('/memory-metrics/:deviceId', authenticateToken, async (req, res) => {
+router.get("/memory-metrics/:deviceId", authenticateToken, async (req, res) => {
   try {
     const { deviceId } = req.params;
 
@@ -330,8 +344,8 @@ router.get('/memory-metrics/:deviceId', authenticateToken, async (req, res) => {
           averageUsage: { $avg: "$usagePercentage" },
           minUsage: { $min: "$usagePercentage" },
           maxUsage: { $max: "$usagePercentage" },
-          metrics: { $push: "$$ROOT" }
-        }
+          metrics: { $push: "$$ROOT" },
+        },
       },
       {
         $project: {
@@ -339,16 +353,16 @@ router.get('/memory-metrics/:deviceId', authenticateToken, async (req, res) => {
           statistics: {
             averageUsage: { $round: ["$averageUsage", 2] },
             minUsage: { $round: ["$minUsage", 2] },
-            maxUsage: { $round: ["$maxUsage", 2] }
+            maxUsage: { $round: ["$maxUsage", 2] },
           },
           metrics: {
             $slice: [
               { $sortArray: { input: "$metrics", sortBy: { timestamp: -1 } } },
-              100
-            ]
-          }
-        }
-      }
+              100,
+            ],
+          },
+        },
+      },
     ]);
 
     const peakTime = await MemoryMetrics.findOne(
@@ -362,21 +376,21 @@ router.get('/memory-metrics/:deviceId', authenticateToken, async (req, res) => {
         ...stats[0],
         statistics: {
           ...stats[0]?.statistics,
-          peakTime: peakTime?.timestamp
-        }
-      }
+          peakTime: peakTime?.timestamp,
+        },
+      },
     });
   } catch (error) {
-    console.error('Error fetching memory metrics:', error);
+    console.error("Error fetching memory metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch memory metrics'
+      error: "Failed to fetch memory metrics",
     });
   }
 });
 
 // Fetch disk metrics
-router.get('/disk-metrics', authenticateToken, async (req, res) => {
+router.get("/disk-metrics", authenticateToken, async (req, res) => {
   try {
     const { deviceId, startDate, endDate } = req.query;
     let query = {};
@@ -401,18 +415,18 @@ router.get('/disk-metrics', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      data: metrics
+      data: metrics,
     });
   } catch (error) {
-    console.error('Error fetching disk metrics:', error);
+    console.error("Error fetching disk metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch disk metrics'
+      error: "Failed to fetch disk metrics",
     });
   }
 });
 
-router.get('/disk-metrics/:deviceId', authenticateToken, async (req, res) => {
+router.get("/disk-metrics/:deviceId", authenticateToken, async (req, res) => {
   try {
     const { deviceId } = req.params;
 
@@ -423,17 +437,17 @@ router.get('/disk-metrics/:deviceId', authenticateToken, async (req, res) => {
           _id: null,
           averageUsage: { $avg: "$usagePercentage" },
           minUsage: { $min: "$usagePercentage" },
-          maxUsage: { $max: "$usagePercentage" }
-        }
+          maxUsage: { $max: "$usagePercentage" },
+        },
       },
       {
         $project: {
           _id: 0,
           averageUsage: { $round: ["$averageUsage", 2] },
           minUsage: { $round: ["$minUsage", 2] },
-          maxUsage: { $round: ["$maxUsage", 2] }
-        }
-      }
+          maxUsage: { $round: ["$maxUsage", 2] },
+        },
+      },
     ]);
 
     const peakTime = await DiskMetrics.findOne(
@@ -444,17 +458,17 @@ router.get('/disk-metrics/:deviceId', authenticateToken, async (req, res) => {
     const latestMetricsByFilesystem = await DiskMetrics.aggregate([
       { $match: { deviceId } },
       {
-        $sort: { timestamp: -1 }
+        $sort: { timestamp: -1 },
       },
       {
         $group: {
           _id: "$filesystem",
-          latestMetric: { $first: "$$ROOT" }
-        }
+          latestMetric: { $first: "$$ROOT" },
+        },
       },
       {
-        $replaceRoot: { newRoot: "$latestMetric" }
-      }
+        $replaceRoot: { newRoot: "$latestMetric" },
+      },
     ]);
 
     res.json({
@@ -462,29 +476,29 @@ router.get('/disk-metrics/:deviceId', authenticateToken, async (req, res) => {
       data: {
         statistics: {
           ...stats[0],
-          peakTime: peakTime?.timestamp
+          peakTime: peakTime?.timestamp,
         },
-        metrics: latestMetricsByFilesystem
-      }
+        metrics: latestMetricsByFilesystem,
+      },
     });
   } catch (error) {
-    console.error('Error fetching disk metrics:', error);
+    console.error("Error fetching disk metrics:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch disk metrics'
+      error: "Failed to fetch disk metrics",
     });
   }
 });
 
 // Fetch server status counts
-router.get('/server-status', authenticateToken, async (req, res) => {
+router.get("/server-status", authenticateToken, async (req, res) => {
   try {
     const servers = await Device.find();
     const statusCategories = {
       up: { count: 0, deviceIds: [] },
       trouble: { count: 0, deviceIds: [] },
       critical: { count: 0, deviceIds: [] },
-      down: { count: 0, deviceIds: [] }
+      down: { count: 0, deviceIds: [] },
     };
 
     const thresholdTime = new Date(Date.now() - 5 * 60 * 1000);
@@ -500,19 +514,42 @@ router.get('/server-status', authenticateToken, async (req, res) => {
         .sort({ timestamp: -1 })
         .limit(1);
 
+      // Fetch all latest disk metrics for this device
       const diskMetrics = await DiskMetrics.aggregate([
         { $match: { deviceId } },
         { $sort: { timestamp: -1 } },
         {
           $group: {
             _id: "$filesystem",
-            latestMetric: { $first: "$$ROOT" }
-          }
+            latestMetric: { $first: "$$ROOT" },
+          },
         },
-        { $replaceRoot: { newRoot: "$latestMetric" } }
+        { $replaceRoot: { newRoot: "$latestMetric" } },
       ]);
 
-      const latestTimestamp = latestCpuMetric?.timestamp || latestMemoryMetric?.timestamp ||
+      // Calculate overall disk usage percentage
+      let overallDiskUsage = 0;
+      let totalUsed = 0;
+      let totalSize = 0;
+      if (diskMetrics.length > 0) {
+        for (const disk of diskMetrics) {
+          if (
+            typeof disk.used === "number" &&
+            typeof disk.size === "number" &&
+            disk.size > 0
+          ) {
+            totalUsed += disk.used;
+            totalSize += disk.size;
+          }
+        }
+        if (totalSize > 0) {
+          overallDiskUsage = (totalUsed / totalSize) * 100;
+        }
+      }
+
+      const latestTimestamp =
+        latestCpuMetric?.timestamp ||
+        latestMemoryMetric?.timestamp ||
         (diskMetrics.length > 0 ? diskMetrics[0].timestamp : null);
 
       if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
@@ -521,15 +558,15 @@ router.get('/server-status', authenticateToken, async (req, res) => {
         continue;
       }
 
-      const cpuUsage = latestCpuMetric ? parseFloat(latestCpuMetric.usagePercentage) : 0;
-      const memoryUsage = latestMemoryMetric ? parseFloat(latestMemoryMetric.usagePercentage) : 0;
+      const cpuUsage = latestCpuMetric
+        ? parseFloat(latestCpuMetric.usagePercentage)
+        : 0;
+      const memoryUsage = latestMemoryMetric
+        ? parseFloat(latestMemoryMetric.usagePercentage)
+        : 0;
 
-      let maxDiskUsage = 0;
-      if (diskMetrics.length > 0) {
-        maxDiskUsage = Math.max(...diskMetrics.map(disk => disk.usagePercentage || 0));
-      }
-
-      const maxUsage = Math.max(cpuUsage, memoryUsage, maxDiskUsage);
+      // Use overallDiskUsage instead of maxDiskUsage
+      const maxUsage = Math.max(cpuUsage, memoryUsage, overallDiskUsage);
 
       if (maxUsage >= 90) {
         statusCategories.critical.count++;
@@ -545,13 +582,13 @@ router.get('/server-status', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      data: statusCategories
+      data: statusCategories,
     });
   } catch (error) {
-    console.error('Error fetching server status counts:', error);
+    console.error("Error fetching server status counts:", error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch server status counts'
+      error: "Failed to fetch server status counts",
     });
   }
 });
