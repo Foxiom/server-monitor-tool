@@ -208,6 +208,7 @@ router.get("/servers", authenticateToken, async (req, res) => {
     }
     const servers = await Device.find(conditions);
     const serversWithMetrics = [];
+    const thresholdTime = new Date(Date.now() - 5 * 60 * 1000);
 
     for (const server of servers) {
       const deviceId = server.deviceId;
@@ -233,11 +234,32 @@ router.get("/servers", authenticateToken, async (req, res) => {
         { $replaceRoot: { newRoot: "$latestMetric" } },
       ]);
 
+      // Calculate overall disk usage percentage
       let avgDiskUsage = 0;
+      let totalUsed = 0;
+      let totalSize = 0;
       if (diskMetrics.length > 0) {
+        // Calculate average disk usage percentage for backward compatibility
         avgDiskUsage =
           diskMetrics.reduce((sum, disk) => sum + disk.usagePercentage, 0) /
           diskMetrics.length;
+          
+        // Calculate overall disk usage for status determination
+        for (const disk of diskMetrics) {
+          if (
+            typeof disk.used === "number" &&
+            typeof disk.size === "number" &&
+            disk.size > 0
+          ) {
+            totalUsed += disk.used;
+            totalSize += disk.size;
+          }
+        }
+      }
+      
+      let overallDiskUsage = 0;
+      if (totalSize > 0) {
+        overallDiskUsage = (totalUsed / totalSize) * 100;
       }
 
       serverData.metrics = {
@@ -251,6 +273,34 @@ router.get("/servers", authenticateToken, async (req, res) => {
           diskMetrics.length > 0 ? parseFloat(avgDiskUsage.toFixed(2)) : null,
         lastUpdated: latestCpuMetric ? latestCpuMetric.timestamp : null,
       };
+      
+      // Determine server status
+      const latestTimestamp =
+        latestCpuMetric?.timestamp ||
+        latestMemoryMetric?.timestamp ||
+        (diskMetrics.length > 0 ? diskMetrics[0].timestamp : null);
+
+      if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
+        serverData.status = "down";
+      } else {
+        const cpuUsage = latestCpuMetric
+          ? parseFloat(latestCpuMetric.usagePercentage)
+          : 0;
+        const memoryUsage = latestMemoryMetric
+          ? parseFloat(latestMemoryMetric.usagePercentage)
+          : 0;
+
+        // Use the maximum usage value to determine status
+        const maxUsage = Math.max(cpuUsage, memoryUsage, overallDiskUsage);
+
+        if (maxUsage >= 90) {
+          serverData.status = "critical";
+        } else if (maxUsage >= 80) {
+          serverData.status = "trouble";
+        } else {
+          serverData.status = "up";
+        }
+      }
 
       serversWithMetrics.push(serverData);
     }
