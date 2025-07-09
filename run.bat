@@ -8,10 +8,13 @@ echo ==================================================
 
 :: Function to check if a command exists
 :command_exists
+echo 🔍 Checking for %1...
 where %1 >nul 2>&1
 if %ERRORLEVEL% equ 0 (
+    echo ✅ %1 is found.
     exit /b 0
 ) else (
+    echo ❌ %1 is not found.
     exit /b 1
 )
 
