@@ -8,13 +8,13 @@ echo ==================================================
 
 :: Function to check if a command exists
 :command_exists
-echo  Checking for %1...
-where %1 >nul 2>&1
+echo  Checking for %~1...
+where %~1 >nul 2>&1
 if %ERRORLEVEL% equ 0 (
-    echo  %1 is found.
+    echo  %~1 is found.
     exit /b 0
 ) else (
-    echo  %1 is not found.
+    echo  %~1 is not found.
     exit /b 1
 )
 
@@ -22,6 +22,7 @@ if %ERRORLEVEL% equ 0 (
 call :command_exists node
 if %ERRORLEVEL% neq 0 (
     echo ❌ Node.js is not installed. Please install Node.js from https://nodejs.org/ and add it to PATH.
+    pause
     exit /b 1
 )
 echo ✅ Node.js is installed.
@@ -30,6 +31,7 @@ echo ✅ Node.js is installed.
 call :command_exists git
 if %ERRORLEVEL% neq 0 (
     echo ❌ Git is not installed. Please install Git from https://git-scm.com/ and add it to PATH.
+    pause
     exit /b 1
 )
 echo ✅ Git is installed.
@@ -41,6 +43,7 @@ if %ERRORLEVEL% neq 0 (
     npm install -g pm2
     if %ERRORLEVEL% neq 0 (
         echo ❌ Failed to install PM2.
+        pause
         exit /b 1
     )
 )
@@ -52,6 +55,7 @@ if exist posting_server (
     rmdir /s /q posting_server
     if %ERRORLEVEL% neq 0 (
         echo ❌ Failed to remove posting_server directory.
+        pause
         exit /b 1
     )
 )
@@ -62,6 +66,7 @@ if not exist logs (
     mkdir logs
     if %ERRORLEVEL% neq 0 (
         echo ❌ Failed to create logs directory.
+        pause
         exit /b 1
     )
 )
@@ -73,6 +78,7 @@ git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git "%TEMP_DIR
 if %ERRORLEVEL% neq 0 (
     echo ❌ Failed to clone repository.
     rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+    pause
     exit /b 1
 )
 
@@ -82,6 +88,7 @@ xcopy /E /I /Y "%TEMP_DIR%\posting_server" posting_server
 if %ERRORLEVEL% neq 0 (
     echo ❌ Failed to copy posting_server folder.
     rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+    pause
     exit /b 1
 )
 
@@ -95,6 +102,7 @@ if %ERRORLEVEL% neq 0 (
 cd posting_server
 if %ERRORLEVEL% neq 0 (
     echo ❌ Failed to navigate to posting_server directory.
+    pause
     exit /b 1
 )
 
@@ -103,14 +111,15 @@ echo 📦 Installing posting server dependencies...
 npm install
 if %ERRORLEVEL% neq 0 (
     echo ❌ Failed to install dependencies.
+    pause
     exit /b 1
 )
 
 :: Set permissions (Windows equivalent: ensure files are writable)
 echo 🔒 Setting up permissions...
 :: Grant full control to current user for posting_server and logs
-icacls . /grant "%USERNAME%:F" /T >nul
-icacls ..\logs /grant "%USERNAME%:F" /T >nul
+icacls . /grant "%USERNAME%:F" /T >nul 2>&1
+icacls ..\logs /grant "%USERNAME%:F" /T >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo ⚠️ Warning: Failed to set permissions. Continuing...
 )
@@ -120,6 +129,7 @@ echo 🚀 Starting posting server with PM2...
 pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log
 if %ERRORLEVEL% neq 0 (
     echo ❌ Failed to start server with PM2.
+    pause
     exit /b 1
 )
 
