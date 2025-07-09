@@ -6,56 +6,6 @@ echo ==================================================
 echo Setting up Posting Server...
 echo ==================================================
 
-:: Function to check if a command exists
-:command_exists
-if "%~1"=="" (
-    echo ❌ Error: No command specified for command_exists.
-    pause
-    exit /b 1
-)
-echo Checking for %~1...
-where %~1 >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo ✅ %~1 is found.
-    exit /b 0
-) else (
-    echo ❌ %~1 is not found.
-    exit /b 1
-)
-
-:: Function to install Chocolatey
-:install_choco
-echo 📦 Installing Chocolatey...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12; Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))"
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to install Chocolatey.
-    pause
-    exit /b 1
-)
-exit /b 0
-
-:: Function to install Node.js
-:install_nodejs
-echo 📦 Installing Node.js...
-choco install nodejs-lts -y
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to install Node.js.
-    pause
-    exit /b 1
-)
-exit /b 0
-
-:: Function to install Git
-:install_git
-echo 📦 Installing Git...
-choco install git -y
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to install Git.
-    pause
-    exit /b 1
-)
-exit /b 0
-
 :: Check and install Chocolatey if not present
 call :command_exists choco
 if %ERRORLEVEL% neq 0 (
@@ -159,7 +109,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-:: Set permissions (Windows equivalent: ensure files are writable)
+:: Set permissions
 echo 🔒 Setting up permissions...
 icacls . /grant "%USERNAME%:F" /T >nul 2>&1
 icacls ..\logs /grant "%USERNAME%:F" /T >nul 2>&1
@@ -209,3 +159,54 @@ echo.
 
 endlocal
 pause
+exit /b 0
+
+:: ===========================
+:: Function Definitions Below
+:: ===========================
+
+:command_exists
+if "%~1"=="" (
+    echo ❌ Error: No command specified for command_exists.
+    pause
+    exit /b 1
+)
+echo Checking for %~1...
+where %~1 >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    echo ✅ %~1 is found.
+    exit /b 0
+) else (
+    echo ❌ %~1 is not found.
+    exit /b 1
+)
+
+:install_choco
+echo 📦 Installing Chocolatey...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12; Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))"
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to install Chocolatey.
+    pause
+    exit /b 1
+)
+exit /b 0
+
+:install_nodejs
+echo 📦 Installing Node.js...
+choco install nodejs-lts -y
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to install Node.js.
+    pause
+    exit /b 1
+)
+exit /b 0
+
+:install_git
+echo 📦 Installing Git...
+choco install git -y
+if %ERRORLEVEL% neq 0 (
+    echo ❌ Failed to install Git.
+    pause
+    exit /b 1
+)
+exit /b 0
