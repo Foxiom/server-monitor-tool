@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 
 :: Display header
 echo ==================================================
-echo Setting up Posting Server
+echo Setting up Posting Server...
 echo ==================================================
 
 :: Function to check if a command exists
