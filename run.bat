@@ -1,139 +1,118 @@
 @echo off
-setlocal EnableDelayedExpansion
+setlocal enabledelayedexpansion
 
-:: Display header
-echo ==================================================
-echo Setting up Posting Server
-echo ==================================================
+:: Enable command extensions
+setlocal EnableExtensions
 
 :: Function to check if a command exists
-:command_exists
-where %1 >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    exit /b 0
-) else (
+where node >nul 2>nul
+if %errorlevel% neq 0 (
+    echo ❌ Node.js is not installed.
+    echo Please install Node.js from https://nodejs.org/
+    echo After installation, restart this script.
+    pause
     exit /b 1
 )
 
-:: Check for Node.js
-call :command_exists node
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Node.js is not installed. Please install Node.js from https://nodejs.org/ and add it to PATH.
+where git >nul 2>nul
+if %errorlevel% neq 0 (
+    echo ❌ Git is not installed.
+    echo Please install Git from https://git-scm.com/
+    echo After installation, restart this script.
+    pause
     exit /b 1
 )
-echo ✅ Node.js is installed.
 
-:: Check for Git
-call :command_exists git
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Git is not installed. Please install Git from https://git-scm.com/ and add it to PATH.
-    exit /b 1
-)
-echo ✅ Git is installed.
-
-:: Check for PM2, install if missing
-call :command_exists pm2
-if %ERRORLEVEL% neq 0 (
+:: Check if PM2 is installed, if not install it globally
+where pm2 >nul 2>nul
+if %errorlevel% neq 0 (
     echo 📦 Installing PM2 globally...
-    npm install -g pm2
-    if %ERRORLEVEL% neq 0 (
-        echo ❌ Failed to install PM2.
+    call npm install -g pm2
+    if %errorlevel% neq 0 (
+        echo ❌ Failed to install PM2
+        pause
         exit /b 1
     )
 )
-echo ✅ PM2 is installed.
 
 :: Remove existing posting_server directory if it exists
-if exist posting_server (
-    echo 🗑️ Removing existing posting_server directory...
+if exist "posting_server" (
+    echo 🗑️  Removing existing posting_server directory...
     rmdir /s /q posting_server
-    if %ERRORLEVEL% neq 0 (
-        echo ❌ Failed to remove posting_server directory.
-        exit /b 1
-    )
 )
 
-:: Create logs directory
-if not exist logs (
-    echo 📁 Creating logs directory...
+:: Create logs directory if it doesn't exist
+if not exist "logs" (
     mkdir logs
-    if %ERRORLEVEL% neq 0 (
-        echo ❌ Failed to create logs directory.
-        exit /b 1
-    )
 )
 
-:: Clone the repository to a temporary directory
-echo ⬇️ Downloading posting_server from GitHub...
-set "TEMP_DIR=%TEMP%\server-monitor-tool-%RANDOM%"
+:: Setup posting server
+echo 🔧 Setting up posting server...
+
+:: Create temporary directory
+set "TEMP_DIR=%TEMP%\posting_server_temp_%RANDOM%"
+mkdir "%TEMP_DIR%"
+
+:: Clone the repository to temporary directory (shallow clone for efficiency)
+echo ⬇️ Downloading complete posting server from GitHub...
 git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git "%TEMP_DIR%"
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to clone repository.
-    rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo ❌ Failed to clone repository
+    rmdir /s /q "%TEMP_DIR%"
+    pause
     exit /b 1
 )
 
-:: Copy posting_server folder
-echo 📂 Copying posting_server folder...
-xcopy /E /I /Y "%TEMP_DIR%\posting_server" posting_server
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to copy posting_server folder.
-    rmdir /s /q "%TEMP_DIR%" >nul 2>&1
+:: Copy only the posting_server folder to our target location
+xcopy "%TEMP_DIR%\posting_server" "posting_server\" /E /I /H /Y
+if %errorlevel% neq 0 (
+    echo ❌ Failed to copy posting_server directory
+    rmdir /s /q "%TEMP_DIR%"
+    pause
     exit /b 1
 )
 
 :: Clean up temporary directory
 rmdir /s /q "%TEMP_DIR%"
-if %ERRORLEVEL% neq 0 (
-    echo ⚠️ Warning: Failed to clean up temporary directory.
-)
 
 :: Navigate to posting_server directory
 cd posting_server
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to navigate to posting_server directory.
-    exit /b 1
-)
 
-:: Install dependencies
+:: Install posting server dependencies
 echo 📦 Installing posting server dependencies...
-npm install
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to install dependencies.
+call npm install
+if %errorlevel% neq 0 (
+    echo ❌ Failed to install dependencies
+    cd ..
+    pause
     exit /b 1
 )
 
-:: Set permissions (Windows equivalent: ensure files are writable)
-echo 🔒 Setting up permissions...
-:: Grant full control to current user for posting_server and logs
-icacls . /grant "%USERNAME%:F" /T >nul
-icacls ..\logs /grant "%USERNAME%:F" /T >nul
-if %ERRORLEVEL% neq 0 (
-    echo ⚠️ Warning: Failed to set permissions. Continuing...
-)
-
-:: Start the server with PM2
+:: Start the server using PM2
 echo 🚀 Starting posting server with PM2...
-pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log
-if %ERRORLEVEL% neq 0 (
-    echo ❌ Failed to start server with PM2.
+call pm2 start server.js --name "posting-server" --log ../logs/posting-server.log
+if %errorlevel% neq 0 (
+    echo ❌ Failed to start server with PM2
+    cd ..
+    pause
     exit /b 1
 )
 
 :: Save PM2 process list
-pm2 save
-if %ERRORLEVEL% neq 0 (
-    echo ⚠️ Warning: Failed to save PM2 process list.
-)
+call pm2 save
 
-:: Setup PM2 to start on system boot
+:: Setup PM2 to start on system boot (Windows service)
 echo 🔧 Setting up PM2 to start on system boot...
-pm2 startup
-if %ERRORLEVEL% neq 0 (
-    echo ⚠️ Warning: Failed to set up PM2 for system boot.
+call pm2-windows-startup install
+if %errorlevel% neq 0 (
+    echo ⚠️  PM2 Windows startup setup failed. You may need to install pm2-windows-startup manually:
+    echo    npm install -g pm2-windows-startup
+    echo    pm2-windows-startup install
 )
 
-:: Display success message
+:: Go back to original directory
+cd ..
+
 echo.
 echo ✅ Server started and configured to run on system boot!
 echo 📁 Downloaded complete posting server with all folders:
@@ -150,6 +129,5 @@ echo   - pm2 logs posting-server # View posting server logs
 echo   - pm2 stop all           # Stop the server
 echo   - pm2 restart all        # Restart the server
 echo.
-
-endlocal
-pause
+echo Press any key to exit...
+pause >nul
