@@ -27,12 +27,36 @@ if %errorlevel% neq 0 (
 where pm2 >nul 2>nul
 if %errorlevel% neq 0 (
     echo 📦 Installing PM2 globally...
-    call npm install -g pm2
+    echo This may take a few minutes...
+    
+    :: Try multiple installation methods
+    echo Attempting standard installation...
+    call npm install -g pm2 --force
     if %errorlevel% neq 0 (
-        echo ❌ Failed to install PM2
+        echo Standard installation failed, trying with --unsafe-perm...
+        call npm install -g pm2 --unsafe-perm --force
+        if %errorlevel% neq 0 (
+            echo Global installation failed, trying alternative method...
+            call npm config set fund false
+            call npm install -g pm2 --no-fund --force
+            if %errorlevel% neq 0 (
+                echo ❌ All PM2 installation methods failed
+                echo Please try running this script as Administrator
+                echo Or manually install PM2 with: npm install -g pm2 --force
+                pause
+                exit /b 1
+            )
+        )
+    )
+    
+    :: Verify PM2 installation
+    where pm2 >nul 2>nul
+    if %errorlevel% neq 0 (
+        echo ❌ PM2 installation verification failed
         pause
         exit /b 1
     )
+    echo ✅ PM2 installed successfully
 )
 
 :: Remove existing posting_server directory if it exists
@@ -103,11 +127,23 @@ call pm2 save
 
 :: Setup PM2 to start on system boot (Windows service)
 echo 🔧 Setting up PM2 to start on system boot...
+
+:: First try to install pm2-windows-startup
+where pm2-windows-startup >nul 2>nul
+if %errorlevel% neq 0 (
+    echo Installing pm2-windows-startup...
+    call npm install -g pm2-windows-startup --force
+)
+
+:: Try to setup PM2 startup
 call pm2-windows-startup install
 if %errorlevel% neq 0 (
-    echo ⚠️  PM2 Windows startup setup failed. You may need to install pm2-windows-startup manually:
+    echo ⚠️  PM2 Windows startup setup failed. 
+    echo You can manually set this up later by running:
     echo    npm install -g pm2-windows-startup
     echo    pm2-windows-startup install
+    echo.
+    echo Alternatively, you can use PM2 without auto-startup.
 )
 
 :: Go back to original directory
