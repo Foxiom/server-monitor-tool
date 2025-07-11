@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 # Function to clean up on error
 function Cleanup {
     if (Test-Path "posting_server") {
-        Write-Host "X An error occurred. Cleaning up..." -ForegroundColor Red
+        Write-Host "An error occurred. Cleaning up..." -ForegroundColor Red
         Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
     }
     if ($null -ne $TempDir -and (Test-Path $TempDir)) {
