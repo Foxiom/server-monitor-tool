@@ -47,8 +47,6 @@ function Install-NodeJS {
     Write-Host "Installing Node.js..." -ForegroundColor Yellow
     if (!(Test-Command "choco")) {
         Install-Chocolatey
-    }else{
-            Write-Host "Installing Node.js..." -ForegroundColor Yellow
     }
     choco install nodejs-lts -y
     
