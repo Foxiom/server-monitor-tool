@@ -47,6 +47,8 @@ function Install-NodeJS {
     Write-Host "Installing Node.js..." -ForegroundColor Yellow
     if (!(Test-Command "choco")) {
         Install-Chocolatey
+    }else{
+        Write-Host "choco installed" -ForegroundColor Yellow
     }
     choco install nodejs-lts -y
     
@@ -61,6 +63,8 @@ function Install-Git {
     Write-Host "Installing Git..." -ForegroundColor Yellow
     if (!(Test-Command "choco")) {
         Install-Chocolatey
+    }else{
+        Write-Host "choco installed" -ForegroundColor Yellow
     }
     choco install git -y
     
@@ -74,12 +78,18 @@ function Install-Git {
 if (!(Test-Command "node")) {
     Write-Host "Node.js is not installed." -ForegroundColor Red
     Install-NodeJS
+}else {
+    Write-Host "Node.js is already installed." -ForegroundColor Green
+    # Optionally show the version:
+    node --version
 }
 
 # Check and install Git if not present
 if (!(Test-Command "git")) {
     Write-Host "Git is not installed." -ForegroundColor Red
     Install-Git
+}else{
+    Write-Host "choco installed" -ForegroundColor Yellow
 }
 
 # Check if PM2 is installed, if not install it globally
