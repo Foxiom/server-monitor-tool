@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 # Function to clean up on error
 function Cleanup {
     if (Test-Path "posting_server") {
-        Write-Host "An error occurred. Cleaning up..." -ForegroundColor Red
+        Write-Host "X An error occurred. Cleaning up..." -ForegroundColor Red
         Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
     }
     if ($null -ne $TempDir -and (Test-Path $TempDir)) {
@@ -37,7 +37,9 @@ function Install-Chocolatey {
     Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
     
     # Refresh environment variables
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machinePath;$userPath"
 }
 
 # Function to install Node.js
@@ -49,7 +51,9 @@ function Install-NodeJS {
     choco install nodejs-lts -y
     
     # Refresh environment variables
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machinePath;$userPath"
 }
 
 # Function to install Git
@@ -61,7 +65,9 @@ function Install-Git {
     choco install git -y
     
     # Refresh environment variables
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machinePath;$userPath"
 }
 
 # Check and install Node.js if not present
@@ -116,7 +122,6 @@ npm install
 
 # Set posting server permissions (Windows equivalent)
 Write-Host "Setting up permissions..." -ForegroundColor Yellow
-# Note: Windows doesn't have the same permission system as Linux, but we can set basic attributes
 Get-ChildItem -Recurse | ForEach-Object {
     if ($_.PSIsContainer) {
         # Directory - no special action needed on Windows
