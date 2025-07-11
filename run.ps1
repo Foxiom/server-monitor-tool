@@ -31,7 +31,7 @@ function Test-Command {
 
 # Function to install Chocolatey
 function Install-Chocolatey {
-    Write-Host "Installing Chocolatey..." -ForegroundColor Yellow
+    Write-Host "Installing Chocolatey...." -ForegroundColor Yellow
     Set-ExecutionPolicy Bypass -Scope Process -Force
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
     Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
@@ -44,7 +44,7 @@ function Install-Chocolatey {
 
 # Function to install Node.js
 function Install-NodeJS {
-    Write-Host "Installing Node.js..." -ForegroundColor Yellow
+    Write-Host "Installing Node.js...." -ForegroundColor Yellow
     if (!(Test-Command "choco")) {
         Install-Chocolatey
     }
@@ -58,7 +58,7 @@ function Install-NodeJS {
 
 # Function to install Git
 function Install-Git {
-    Write-Host "Installing Git..." -ForegroundColor Yellow
+    Write-Host "Installing Git...." -ForegroundColor Yellow
     if (!(Test-Command "choco")) {
         Install-Chocolatey
     }else{
@@ -86,13 +86,13 @@ if (!(Test-Command "git")) {
 
 # Check if PM2 is installed, if not install it globally
 if (!(Test-Command "pm2")) {
-    Write-Host "Installing PM2 globally..." -ForegroundColor Yellow
+    Write-Host "Installing PM2 globally...." -ForegroundColor Yellow
     npm install -g pm2
 }
 
 # Remove existing posting_server directory if it exists
 if (Test-Path "posting_server") {
-    Write-Host "Removing existing posting_server directory..." -ForegroundColor Yellow
+    Write-Host "Removing existing posting_server directory...." -ForegroundColor Yellow
     Remove-Item -Recurse -Force "posting_server"
 }
 
@@ -102,7 +102,7 @@ if (!(Test-Path "logs")) {
 }
 
 # Setup posting server
-Write-Host "Setting up posting server..." -ForegroundColor Green
+Write-Host "Setting up posting server...." -ForegroundColor Green
 
 # Clone the repository to a temporary directory (shallow clone for efficiency)
 Write-Host "Downloading complete posting server from GitHub..." -ForegroundColor Cyan
@@ -119,11 +119,11 @@ Remove-Item -Recurse -Force $TempDir
 Set-Location "posting_server"
 
 # Install posting server dependencies
-Write-Host "Installing posting server dependencies..." -ForegroundColor Yellow
+Write-Host "Installing posting server dependencies...." -ForegroundColor Yellow
 npm install
 
 # Set posting server permissions (Windows equivalent)
-Write-Host "Setting up permissions..." -ForegroundColor Yellow
+Write-Host "Setting up permissions...." -ForegroundColor Yellow
 Get-ChildItem -Recurse | ForEach-Object {
     if ($_.PSIsContainer) {
         # Directory - no special action needed on Windows
@@ -134,14 +134,14 @@ Get-ChildItem -Recurse | ForEach-Object {
 }
 
 # Start the server using PM2
-Write-Host "Starting posting server with PM2..." -ForegroundColor Green
+Write-Host "Starting posting server with PM2...." -ForegroundColor Green
 pm2 start server.js --name "posting-server" --log "../logs/posting-server.log"
 
 # Save PM2 process list
 pm2 save
 
 # Setup PM2 to start on system boot
-Write-Host "Setting up PM2 to start on system boot..." -ForegroundColor Yellow
+Write-Host "Setting up PM2 to start on system boot...." -ForegroundColor Yellow
 pm2 startup
 
 Write-Host "Server started and configured to run on system boot!" -ForegroundColor Green
