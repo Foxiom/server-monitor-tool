@@ -1,140 +1,153 @@
+# PowerShell Script for Setting up Posting Server
 # Exit on error
 $ErrorActionPreference = "Stop"
 
 # Function to clean up on error
 function Cleanup {
     if (Test-Path "posting_server") {
-        Write-Host "❌ An error occurred. Cleaning up..."
-        Remove-Item -Path "posting_server" -Recurse -Force
+        Write-Host "❌ An error occurred. Cleaning up..." -ForegroundColor Red
+        Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
     }
-    if ($null -ne $env:TEMP_DIR -and (Test-Path $env:TEMP_DIR)) {
-        Remove-Item -Path $env:TEMP_DIR -Recurse -Force
+    if ($null -ne $TempDir -and (Test-Path $TempDir)) {
+        Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
     }
     exit 1
 }
 
 # Set up error handling
-trap { 
-    Write-Host "❌ Error: $_"
-    Cleanup
-}
+trap { Cleanup }
 
 # Function to check if a command exists
-function Command-Exists {
-    param ($Command)
-    return [bool](Get-Command -Name $Command -ErrorAction SilentlyContinue)
+function Test-Command {
+    param($Command)
+    try {
+        Get-Command $Command -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+# Function to install Chocolatey
+function Install-Chocolatey {
+    Write-Host "📦 Installing Chocolatey..." -ForegroundColor Yellow
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+    
+    # Refresh environment variables
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
 # Function to install Node.js
-function Install-NodeJs {
-    Write-Host "📦 Installing Node.js..."
-    winget install -e --id OpenJS.NodeJS.LTS --source winget
-    # Refresh environment to include new Node.js path
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+function Install-NodeJS {
+    Write-Host "📦 Installing Node.js..." -ForegroundColor Yellow
+    if (!(Test-Command "choco")) {
+        Install-Chocolatey
+    }
+    choco install nodejs-lts -y
+    
+    # Refresh environment variables
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
 # Function to install Git
 function Install-Git {
-    Write-Host "📦 Installing Git..."
-    winget install -e --id Git.Git --source winget
-    # Refresh environment to include new Git path
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+    Write-Host "📦 Installing Git..." -ForegroundColor Yellow
+    if (!(Test-Command "choco")) {
+        Install-Chocolatey
+    }
+    choco install git -y
+    
+    # Refresh environment variables
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
-
-# Display header
-Write-Host "=================================================="
-Write-Host "Setting up Posting Server"
-Write-Host "=================================================="
 
 # Check and install Node.js if not present
-if (-not (Command-Exists "node")) {
-    Write-Host "❌ Node.js is not installed."
-    Install-NodeJs
+if (!(Test-Command "node")) {
+    Write-Host "❌ Node.js is not installed." -ForegroundColor Red
+    Install-NodeJS
 }
-Write-Host "✅ Node.js is installed."
 
 # Check and install Git if not present
-if (-not (Command-Exists "git")) {
-    Write-Host "❌ Git is not installed."
+if (!(Test-Command "git")) {
+    Write-Host "❌ Git is not installed." -ForegroundColor Red
     Install-Git
 }
-Write-Host "✅ Git is installed."
 
 # Check if PM2 is installed, if not install it globally
-if (-not (Command-Exists "pm2")) {
-    Write-Host "📦 Installing PM2 globally..."
+if (!(Test-Command "pm2")) {
+    Write-Host "📦 Installing PM2 globally..." -ForegroundColor Yellow
     npm install -g pm2
 }
-Write-Host "✅ PM2 is installed."
 
 # Remove existing posting_server directory if it exists
 if (Test-Path "posting_server") {
-    Write-Host "🗑️ Removing existing posting_server directory..."
-    Remove-Item -Path "posting_server" -Recurse -Force
+    Write-Host "🗑️  Removing existing posting_server directory..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force "posting_server"
 }
 
 # Create logs directory if it doesn't exist
-if (-not (Test-Path "logs")) {
-    Write-Host "📁 Creating logs directory..."
+if (!(Test-Path "logs")) {
     New-Item -ItemType Directory -Path "logs" | Out-Null
 }
 
 # Setup posting server
-Write-Host "🔧 Setting up posting server..."
+Write-Host "🔧 Setting up posting server..." -ForegroundColor Green
 
 # Clone the repository to a temporary directory (shallow clone for efficiency)
-Write-Host "⬇️ Downloading complete posting server from GitHub..."
-$env:TEMP_DIR = Join-Path $env:TEMP "server-monitor-tool-$([guid]::NewGuid().ToString())"
-git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $env:TEMP_DIR
+Write-Host "⬇️ Downloading complete posting server from GitHub..." -ForegroundColor Cyan
+$TempDir = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
+git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $TempDir.FullName
 
-# Copy only the posting_server folder to the current location
-Write-Host "📂 Copying posting_server folder..."
-Copy-Item -Path "$env:TEMP_DIR\posting_server" -Destination "posting_server" -Recurse -Force
+# Copy only the posting_server folder to our target location
+Copy-Item -Recurse -Path (Join-Path $TempDir.FullName "posting_server") -Destination "."
 
 # Clean up temporary directory
-Remove-Item -Path $env:TEMP_DIR -Recurse -Force
-$env:TEMP_DIR = $null
+Remove-Item -Recurse -Force $TempDir
 
 # Navigate to posting_server directory
-Set-Location -Path "posting_server"
+Set-Location "posting_server"
 
 # Install posting server dependencies
-Write-Host "📦 Installing posting server dependencies..."
+Write-Host "📦 Installing posting server dependencies..." -ForegroundColor Yellow
 npm install
 
-# Set permissions (Windows equivalent: grant full control to current user)
-Write-Host "🔒 Setting up permissions..."
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-icacls . /grant "$($currentUser):F" /T | Out-Null
-icacls ..\logs /grant "$($currentUser):F" /T | Out-Null
+# Set posting server permissions (Windows equivalent)
+Write-Host "🔒 Setting up permissions..." -ForegroundColor Yellow
+# Note: Windows doesn't have the same permission system as Linux, but we can set basic attributes
+Get-ChildItem -Recurse | ForEach-Object {
+    if ($_.PSIsContainer) {
+        # Directory - no special action needed on Windows
+    } else {
+        # File - ensure it's not read-only
+        $_.Attributes = $_.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+    }
+}
 
 # Start the server using PM2
-Write-Host "🚀 Starting posting server with PM2..."
-pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log
+Write-Host "🚀 Starting posting server with PM2..." -ForegroundColor Green
+pm2 start server.js --name "posting-server" --log "../logs/posting-server.log"
 
 # Save PM2 process list
 pm2 save
 
 # Setup PM2 to start on system boot
-Write-Host "🔧 Setting up PM2 to start on system boot..."
+Write-Host "🔧 Setting up PM2 to start on system boot..." -ForegroundColor Yellow
 pm2 startup
 
+Write-Host "✅ Server started and configured to run on system boot!" -ForegroundColor Green
+Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
+Write-Host "   - config/" -ForegroundColor White
+Write-Host "   - models/" -ForegroundColor White
+Write-Host "   - utils/" -ForegroundColor White
+Write-Host "   - server.js" -ForegroundColor White
+Write-Host "   - package.json" -ForegroundColor White
 Write-Host ""
-Write-Host "✅ Server started and configured to run on system boot!"
-Write-Host "📁 Downloaded complete posting server with all folders:"
-Write-Host "   - config/"
-Write-Host "   - models/"
-Write-Host "   - utils/"
-Write-Host "   - server.js"
-Write-Host "   - package.json"
-Write-Host ""
-Write-Host "To manage the server, use these PM2 commands:"
-Write-Host "  - pm2 status              # Check server status"
-Write-Host "  - pm2 logs                # View all logs"
-Write-Host "  - pm2 logs posting-server # View posting server logs"
-Write-Host "  - pm2 stop all           # Stop the server"
-Write-Host "  - pm2 restart all        # Restart the server"
-Write-Host ""
-
-# Pause to allow user to see the output
-Read-Host -Prompt "Press Enter to exit"
+Write-Host "To manage the server, use these PM2 commands:" -ForegroundColor Yellow
+Write-Host "  - pm2 status              # Check server status" -ForegroundColor White
+Write-Host "  - pm2 logs                # View all logs" -ForegroundColor White
+Write-Host "  - pm2 logs posting-server # View posting server logs" -ForegroundColor White
+Write-Host "  - pm2 stop all           # Stop the server" -ForegroundColor White
+Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor White
