@@ -643,4 +643,41 @@ router.get("/server-status", authenticateToken, async (req, res) => {
   }
 });
 
+// Delete server and all related metrics data
+router.delete("/servers/:deviceId", authenticateToken, async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    
+    // Find the server first to check if it exists
+    const server = await Device.findOne({ deviceId });
+    
+    if (!server) {
+      return res.status(404).json({
+        success: false,
+        message: "Server not found",
+      });
+    }
+
+    // Delete the server and all related metrics in parallel
+    await Promise.all([
+      Device.deleteOne({ deviceId }),
+      CPUMetrics.deleteMany({ deviceId }),
+      MemoryMetrics.deleteMany({ deviceId }),
+      DiskMetrics.deleteMany({ deviceId }),
+      NetworkMetrics.deleteMany({ deviceId })
+    ]);
+
+    res.json({
+      success: true,
+      message: `Server ${deviceId} and all related metrics have been deleted successfully`
+    });
+  } catch (error) {
+    console.error("Error deleting server and related metrics:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete server and related metrics"
+    });
+  }
+});
+
 module.exports = router;
