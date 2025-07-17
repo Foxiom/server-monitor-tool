@@ -75,35 +75,93 @@ function Install-Git {
     $env:Path = "$machinePath;$userPath"
 }
 
-# Function to setup PM2 Windows startup using Task Scheduler
+# Function to setup PM2 Windows startup using Task Scheduler - FIXED VERSION
 function Setup-PM2WindowsStartup {
-    Write-Host "🔧 Setting up PM2 Windows startup using Task Scheduler..." -ForegroundColor Yellow
+    Write-Host "🔧 Setting up PM2 Windows startup with proper user context..." -ForegroundColor Yellow
     
     try {
-        # Get current user and posting server path
+        # Get current user info
         $CurrentUser = $env:USERNAME
+        $CurrentDomain = $env:USERDOMAIN
         $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
         $LogPath = Join-Path $env:USERPROFILE "logs\pm2-startup.log"
         
-        # Create PM2 startup script with logging
+        # Create logs directory if it doesn't exist
+        $LogDir = Split-Path $LogPath -Parent
+        if (!(Test-Path $LogDir)) {
+            New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+        }
+        
+        # Create improved startup script with explicit PM2 home and environment
         $StartupScript = @"
-# PM2 Startup Script for Posting Server
+# PM2 Startup Script for Posting Server - Fixed Version
+# Set PM2 home directory explicitly
+`$env:PM2_HOME = "`$env:USERPROFILE\.pm2"
+
 # Log startup attempt
-Add-Content -Path "$LogPath" -Value "[\$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] System uptime: \$(Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime)"
-Add-Content -Path "$LogPath" -Value "[\$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Starting PM2 resurrect"
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ==================================="
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 Startup Script Started"
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Current User: \`$env:USERNAME"
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 Home: \`$env:PM2_HOME"
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] System uptime: \`$(Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime)"
+
+# Change to posting server directory
 Set-Location "$PostingServerPath"
-pm2 resurrect
-Start-Sleep -Seconds 5
-Add-Content -Path "$LogPath" -Value "[\$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 resurrect completed, status:"
-pm2 list >> "$LogPath"
-pm2 logs --lines 0
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Changed to directory: \`$(Get-Location)"
+
+# Wait a bit for system to stabilize
+Start-Sleep -Seconds 10
+
+# Check if PM2 dump file exists
+`$dumpFile = Join-Path `$env:PM2_HOME "dump.pm2"
+if (Test-Path `$dumpFile) {
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 dump file found: `$dumpFile"
+} else {
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 dump file NOT found: `$dumpFile"
+}
+
+# Start PM2 resurrect
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Starting PM2 resurrect..."
+try {
+    `$resurrectOutput = pm2 resurrect 2>&1
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 resurrect output: `$resurrectOutput"
+} catch {
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 resurrect failed: `$_"
+}
+
+# Wait for processes to start
+Start-Sleep -Seconds 10
+
+# Check PM2 status
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 status after resurrect:"
+try {
+    `$pm2List = pm2 list 2>&1
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$pm2List"
+} catch {
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 list failed: `$_"
+}
+
+# If no processes found, try to start the server manually
+if (`$pm2List -match "No processes") {
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] No processes found, starting server manually..."
+    try {
+        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
+        pm2 save
+        Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Server started manually and saved"
+    } catch {
+        Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Manual server start failed: `$_"
+    }
+}
+
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 startup script completed"
+Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ==================================="
 "@
         
         # Save the startup script
         $ScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_startup.ps1"
         $StartupScript | Out-File -FilePath $ScriptPath -Encoding UTF8
         
-        # Create scheduled task
+        # Create scheduled task to run as current user (not SYSTEM)
         $TaskName = "PM2 Posting Server Startup"
         $TaskDescription = "Start PM2 posting server on system boot"
         
@@ -115,16 +173,19 @@ pm2 logs --lines 0
             # Task doesn't exist, continue
         }
         
-        # Create new task with SYSTEM user
+        # Create new task with current user context
         $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
         $Trigger = New-ScheduledTaskTrigger -AtStartup
-        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-        $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+        
+        # Use current user instead of SYSTEM
+        $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" -LogonType Interactive -RunLevel Highest
         
         Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal
         
-        Write-Host "✅ Windows Task Scheduler setup completed!" -ForegroundColor Green
+        Write-Host "✅ Windows Task Scheduler setup completed with user context!" -ForegroundColor Green
         Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
+        Write-Host "📋 Running as: $CurrentDomain\$CurrentUser" -ForegroundColor Cyan
         Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
         Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
         
@@ -281,6 +342,7 @@ Write-Host ""
 Write-Host "🔧 Windows Startup Information:" -ForegroundColor Yellow
 Write-Host "   - PM2 processes will auto-start on system boot via Windows Task Scheduler" -ForegroundColor White
 Write-Host "   - Task name: 'PM2 Posting Server Startup'" -ForegroundColor White
+Write-Host "   - Task runs as: $env:USERDOMAIN\$env:USERNAME (your user account)" -ForegroundColor White
 Write-Host "   - You can view/manage the task in Windows Task Scheduler" -ForegroundColor White
 Write-Host "   - Startup log: logs\pm2-startup.log" -ForegroundColor White
 Write-Host ""
