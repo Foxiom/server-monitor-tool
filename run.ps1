@@ -2,6 +2,9 @@
 # Exit on error
 $ErrorActionPreference = "Stop"
 
+# Set working directory to user profile
+Set-Location -Path $env:USERPROFILE
+
 # Function to clean up on error
 function Cleanup {
     if (Test-Path "posting_server") {
@@ -79,14 +82,20 @@ function Setup-PM2WindowsStartup {
     try {
         # Get current user and posting server path
         $CurrentUser = $env:USERNAME
-        $PostingServerPath = Join-Path (Get-Location).Path "posting_server"
+        $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
+        $LogPath = Join-Path $env:USERPROFILE "logs\pm2-startup.log"
         
-        # Create PM2 startup script
+        # Create PM2 startup script with logging
         $StartupScript = @"
 # PM2 Startup Script for Posting Server
+# Log startup attempt
+Add-Content -Path "$LogPath" -Value "[\$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] System uptime: \$(Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime)"
+Add-Content -Path "$LogPath" -Value "[\$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Starting PM2 resurrect"
 Set-Location "$PostingServerPath"
 pm2 resurrect
 Start-Sleep -Seconds 5
+Add-Content -Path "$LogPath" -Value "[\$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 resurrect completed, status:"
+pm2 list >> "$LogPath"
 pm2 logs --lines 0
 "@
         
@@ -106,19 +115,18 @@ pm2 logs --lines 0
             # Task doesn't exist, continue
         }
         
-        # Create new task with proper settings
+        # Create new task with SYSTEM user
         $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
         $Trigger = New-ScheduledTaskTrigger -AtStartup
         $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-        
-        # Use current user context
-        $Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Highest
+        $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
         
         Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal
         
         Write-Host "✅ Windows Task Scheduler setup completed!" -ForegroundColor Green
         Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
         Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
+        Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
         
         return $true
     }
@@ -203,8 +211,6 @@ pm2 save
 
 # Setup PM2 to start on system boot - Windows compatible version
 Write-Host "🔧 Setting up PM2 to start on system boot..." -ForegroundColor Yellow
-
-# Try the standard PM2 startup first (will fail on Windows but we'll catch it)
 try {
     $startupOutput = pm2 startup 2>&1
     if ($startupOutput -match "Init system not found" -or $startupOutput -match "error") {
@@ -251,13 +257,18 @@ if ($pm2Status -match "posting-server.*online") {
 # Install PM2 log rotation module
 Write-Host "🔧 Setting up PM2 log rotation..." -ForegroundColor Yellow
 pm2 install pm2-logrotate
-pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:retain 30
-pm2 set pm2-logrotate:compress true
-pm2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
-pm2 set pm2-logrotate:workerInterval 30
-pm2 set pm2-logrotate:rotateInterval "0 0 * * *"
-pm2 set pm2-logrotate:rotateModule true
+$currentConfig = pm2 conf | Out-String
+if ($currentConfig -notmatch "max_size.*10M") {
+    pm2 set pm2-logrotate:max_size 10M
+    pm2 set pm2-logrotate:retain 30
+    pm2 set pm2-logrotate:compress true
+    pm2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
+    pm2 set pm2-logrotate:workerInterval 30
+    pm2 set pm2-logrotate:rotateInterval "0 0 * * *"
+    pm2 set pm2-logrotate:rotateModule true
+} else {
+    Write-Host "✅ PM2 log rotation settings already configured." -ForegroundColor Green
+}
 
 Write-Host "✅ Server started and configured to run on system boot!" -ForegroundColor Green
 Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
@@ -271,6 +282,7 @@ Write-Host "🔧 Windows Startup Information:" -ForegroundColor Yellow
 Write-Host "   - PM2 processes will auto-start on system boot via Windows Task Scheduler" -ForegroundColor White
 Write-Host "   - Task name: 'PM2 Posting Server Startup'" -ForegroundColor White
 Write-Host "   - You can view/manage the task in Windows Task Scheduler" -ForegroundColor White
+Write-Host "   - Startup log: logs\pm2-startup.log" -ForegroundColor White
 Write-Host ""
 Write-Host "To manage the server, use these PM2 commands:" -ForegroundColor Yellow
 Write-Host "  - pm2 status              # Check server status" -ForegroundColor White
@@ -281,6 +293,6 @@ Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor Wh
 Write-Host "  - pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
 Write-Host ""
 Write-Host "To test auto-startup:" -ForegroundColor Cyan
-Write-Host "  1. Run 'pm2 save' to save current processes" -ForegroundColor White
-Write-Host "  2. Restart your computer" -ForegroundColor White
-Write-Host "  3. Check with 'pm2 status' after boot" -ForegroundColor White
+Write-Host "  1. Restart your computer" -ForegroundColor White
+Write-Host "  2. Check with 'pm2 status' after boot" -ForegroundColor White
+Write-Host "  3. Check startup log at 'logs\pm2-startup.log'" -ForegroundColor White
