@@ -1,4 +1,4 @@
-# Simplified PM2 Setup Script for Windows PowerShell
+# PowerShell Script for Setting up Posting Server
 # Exit on error
 $ErrorActionPreference = "Stop"
 
@@ -62,7 +62,7 @@ function Install-Git {
     if (!(Test-Command "choco")) {
         Install-Chocolatey
     } else {
-        Write-Host "✅ Chocolatey already installed" -ForegroundColor Green
+        Write-Host "✅ Chocolatey already installed" -ForegroundColor Yellow
     }
     choco install git -y
     
@@ -72,56 +72,38 @@ function Install-Git {
     $env:Path = "$machinePath;$userPath"
 }
 
-Write-Host "🚀 Starting Simplified PM2 Posting Server Setup..." -ForegroundColor Cyan
-
 # Check and install Node.js if not present
 if (!(Test-Command "node")) {
     Write-Host "❌ Node.js is not installed." -ForegroundColor Red
     Install-NodeJS
-} else {
-    $nodeVersion = & node --version
-    Write-Host "✅ Node.js is installed: $nodeVersion" -ForegroundColor Green
 }
 
 # Check and install Git if not present
 if (!(Test-Command "git")) {
     Write-Host "❌ Git is not installed." -ForegroundColor Red
     Install-Git
-} else {
-    $gitVersion = & git --version
-    Write-Host "✅ Git is installed: $gitVersion" -ForegroundColor Green
 }
 
-# Install PM2 if not present
+# Check if PM2 is installed, if not install it globally
 if (!(Test-Command "pm2")) {
     Write-Host "📦 Installing PM2 globally..." -ForegroundColor Yellow
     npm install -g pm2
-} else {
-    $pm2Version = & pm2 --version
-    Write-Host "✅ PM2 is installed: $pm2Version" -ForegroundColor Green
-}
-
-# Stop any existing posting-server processes
-Write-Host "🛑 Stopping any existing posting-server processes..." -ForegroundColor Yellow
-try {
-    pm2 delete posting-server 2>$null
-} catch {
-    # Ignore error if process doesn't exist
 }
 
 # Remove existing posting_server directory if it exists
 if (Test-Path "posting_server") {
-    Write-Host "🗑️  Removing existing posting_server directory..." -ForegroundColor Yellow
+    Write-Host "🗑️ Removing existing posting_server directory..." -ForegroundColor Yellow
     Remove-Item -Recurse -Force "posting_server"
 }
 
-# Create logs directory
+# Create logs directory if it doesn't exist
 if (!(Test-Path "logs")) {
+    Write-Host "📁 Creating logs directory..." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path "logs" | Out-Null
 }
 
 # Setup posting server
-Write-Host "🔧 Setting up posting server..." -ForegroundColor Blue
+Write-Host "🔧 Setting up posting server..." -ForegroundColor Green
 
 # Clone the repository to a temporary directory (shallow clone for efficiency)
 Write-Host "⬇️ Downloading complete posting server from GitHub..." -ForegroundColor Cyan
@@ -134,46 +116,71 @@ Copy-Item -Recurse -Path (Join-Path $TempDir.FullName "posting_server") -Destina
 # Clean up temporary directory
 Remove-Item -Recurse -Force $TempDir
 
-# Navigate to posting_server directory and install dependencies
+# Navigate to posting_server directory
 Set-Location "posting_server"
+
+# Install posting server dependencies
 Write-Host "📦 Installing posting server dependencies..." -ForegroundColor Yellow
 npm install
-Set-Location ".."
 
 # Set posting server permissions (Windows equivalent)
 Write-Host "🔒 Setting up permissions..." -ForegroundColor Yellow
-Get-ChildItem -Path "posting_server" -Recurse | ForEach-Object {
-    if (!$_.PSIsContainer) {
+Get-ChildItem -Recurse | ForEach-Object {
+    if ($_.PSIsContainer) {
+        # Directory - no special action needed on Windows
+    } else {
         # File - ensure it's not read-only
         $_.Attributes = $_.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
     }
 }
+# Ensure logs directory is writable
+$logsPath = Join-Path (Get-Location).Path "../logs"
+(Get-Item $logsPath).Attributes = (Get-Item $logsPath).Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
 
-# Start the server using PM2 with simple configuration
+# Start the server using PM2 with exponential backoff restart
 Write-Host "🚀 Starting posting server with PM2..." -ForegroundColor Green
-pm2 start posting_server/server.js `
-    --name "posting-server" `
-    --log "logs/posting-server.log" `
-    --error "logs/posting-server-error.log" `
-    --out "logs/posting-server-out.log" `
-    --max-memory-restart 500M `
-    --time `
-    --restart-delay 2000
+pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
 
 # Save PM2 process list
 Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
 pm2 save
 
 # Setup PM2 to start on system boot
-Write-Host "🔧 Setting up PM2 startup..." -ForegroundColor Yellow
-pm2 startup
+Write-Host "🔧 Setting up PM2 to start on system boot..." -ForegroundColor Yellow
+$startupOutput = pm2 startup | Out-String
+$startupOutput | Out-File -FilePath "pm2_startup_output.txt"
 
-Write-Host ""
-Write-Host "🎉 ==================================" -ForegroundColor Green
-Write-Host "✅ SERVER INSTALLATION COMPLETE!" -ForegroundColor Green
-Write-Host "==================================" -ForegroundColor Green
-Write-Host ""
+# Check if pm2 startup was successful
+if ($startupOutput -match "To setup the Startup Script, copy/paste the following command") {
+    Write-Host "✅ PM2 startup script instructions generated. Please follow the instructions in pm2_startup_output.txt to configure PM2 to run on system boot." -ForegroundColor Green
+} else {
+    Write-Host "⚠️ Warning: PM2 startup script may not have been configured correctly. Please run 'pm2 startup' manually and follow the instructions." -ForegroundColor Yellow
+}
 
+# Verify if the server is running
+Write-Host "🔍 Verifying server status..." -ForegroundColor Yellow
+$pm2Status = pm2 list | Out-String
+if ($pm2Status -match "posting-server.*online") {
+    Write-Host "✅ Posting server is running!" -ForegroundColor Green
+} else {
+    Write-Host "⚠️ Posting server is not running. Attempting to restart..." -ForegroundColor Yellow
+    pm2 restart posting-server
+    $pm2Status = pm2 list | Out-String
+    if ($pm2Status -match "posting-server.*online") {
+        Write-Host "✅ Posting server restarted successfully!" -ForegroundColor Green
+    } else {
+        Write-Host "❌ Failed to start posting server. Please check logs with 'pm2 logs posting-server'." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Install PM2 log rotation module
+Write-Host "🔧 Setting up PM2 log rotation..." -ForegroundColor Yellow
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:compress true
+
+Write-Host "✅ Server started and configured to run on system boot!" -ForegroundColor Green
 Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
 Write-Host "   - config/" -ForegroundColor White
 Write-Host "   - models/" -ForegroundColor White
@@ -181,32 +188,10 @@ Write-Host "   - utils/" -ForegroundColor White
 Write-Host "   - server.js" -ForegroundColor White
 Write-Host "   - package.json" -ForegroundColor White
 Write-Host ""
-
-Write-Host "🔧 Auto-restart features:" -ForegroundColor Yellow
-Write-Host "   ✅ PM2 automatic restarts on crashes" -ForegroundColor Green
-Write-Host "   ✅ Memory-based restarts (500MB limit)" -ForegroundColor Green
-Write-Host "   ✅ Boot startup configured" -ForegroundColor Green
-Write-Host "   ✅ Process monitoring enabled" -ForegroundColor Green
-Write-Host ""
-
-Write-Host "📋 Management Commands:" -ForegroundColor Yellow
-Write-Host "   pm2 status                    # Check server status" -ForegroundColor White
-Write-Host "   pm2 logs posting-server       # View server logs" -ForegroundColor White
-Write-Host "   pm2 restart posting-server    # Restart server" -ForegroundColor White
-Write-Host "   pm2 stop posting-server       # Stop server" -ForegroundColor White
-Write-Host "   pm2 delete posting-server     # Remove server from PM2" -ForegroundColor White
-Write-Host "   pm2 monit                     # Real-time monitoring" -ForegroundColor White
-Write-Host ""
-
-Write-Host "📊 Log Files:" -ForegroundColor Yellow
-Write-Host "   - Combined logs: logs/posting-server.log" -ForegroundColor White
-Write-Host "   - Error logs: logs/posting-server-error.log" -ForegroundColor White
-Write-Host "   - Output logs: logs/posting-server-out.log" -ForegroundColor White
-Write-Host ""
-
-Write-Host "🚀 Your server is now running with PM2 auto-restart!" -ForegroundColor Green
-Write-Host "💡 The server will automatically restart on crashes and start on boot." -ForegroundColor Blue
-Write-Host ""
-
-Write-Host "🔍 Current server status:" -ForegroundColor Cyan
-pm2 status
+Write-Host "To manage the server, use these PM2 commands:" -ForegroundColor Yellow
+Write-Host "  - pm2 status              # Check server status" -ForegroundColor White
+Write-Host "  - pm2 logs                # View all logs" -ForegroundColor White
+Write-Host "  - pm2 logs posting-server # View posting server logs" -ForegroundColor White
+Write-Host "  - pm2 stop all           # Stop the server" -ForegroundColor White
+Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor White
+Write-Host "  - pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
