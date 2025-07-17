@@ -72,6 +72,62 @@ function Install-Git {
     $env:Path = "$machinePath;$userPath"
 }
 
+# Function to setup PM2 Windows startup using Task Scheduler
+function Setup-PM2WindowsStartup {
+    Write-Host "🔧 Setting up PM2 Windows startup using Task Scheduler..." -ForegroundColor Yellow
+    
+    try {
+        # Get current user and posting server path
+        $CurrentUser = $env:USERNAME
+        $PostingServerPath = Join-Path (Get-Location).Path "posting_server"
+        
+        # Create PM2 startup script
+        $StartupScript = @"
+# PM2 Startup Script for Posting Server
+Set-Location "$PostingServerPath"
+pm2 resurrect
+Start-Sleep -Seconds 5
+pm2 logs --lines 0
+"@
+        
+        # Save the startup script
+        $ScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_startup.ps1"
+        $StartupScript | Out-File -FilePath $ScriptPath -Encoding UTF8
+        
+        # Create scheduled task
+        $TaskName = "PM2 Posting Server Startup"
+        $TaskDescription = "Start PM2 posting server on system boot"
+        
+        # Delete existing task if it exists
+        try {
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Task doesn't exist, continue
+        }
+        
+        # Create new task with proper settings
+        $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
+        $Trigger = New-ScheduledTaskTrigger -AtStartup
+        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+        
+        # Use current user context
+        $Principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Highest
+        
+        Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal
+        
+        Write-Host "✅ Windows Task Scheduler setup completed!" -ForegroundColor Green
+        Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
+        Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
+        
+        return $true
+    }
+    catch {
+        Write-Host "⚠️ Failed to setup Windows Task Scheduler: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
 # Check and install Node.js if not present
 if (!(Test-Command "node")) {
     Write-Host "❌ Node.js is not installed." -ForegroundColor Red
@@ -145,16 +201,34 @@ pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" -
 Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
 pm2 save
 
-# Setup PM2 to start on system boot
+# Setup PM2 to start on system boot - Windows compatible version
 Write-Host "🔧 Setting up PM2 to start on system boot..." -ForegroundColor Yellow
-$startupOutput = pm2 startup | Out-String
-$startupOutput | Out-File -FilePath "pm2_startup_output.txt"
 
-# Check if pm2 startup was successful
-if ($startupOutput -match "To setup the Startup Script, copy/paste the following command") {
-    Write-Host "✅ PM2 startup script instructions generated. Please follow the instructions in pm2_startup_output.txt to configure PM2 to run on system boot." -ForegroundColor Green
-} else {
-    Write-Host "⚠️ Warning: PM2 startup script may not have been configured correctly. Please run 'pm2 startup' manually and follow the instructions." -ForegroundColor Yellow
+# Try the standard PM2 startup first (will fail on Windows but we'll catch it)
+try {
+    $startupOutput = pm2 startup 2>&1
+    if ($startupOutput -match "Init system not found" -or $startupOutput -match "error") {
+        Write-Host "⚠️ Standard PM2 startup not supported on Windows. Using Windows Task Scheduler instead..." -ForegroundColor Yellow
+        
+        # Use our Windows-specific startup method
+        $setupSuccess = Setup-PM2WindowsStartup
+        
+        if ($setupSuccess) {
+            Write-Host "✅ PM2 startup configured successfully using Windows Task Scheduler!" -ForegroundColor Green
+        } else {
+            Write-Host "⚠️ Warning: PM2 startup setup failed. Server will need to be started manually after reboot." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "✅ PM2 startup configured successfully!" -ForegroundColor Green
+    }
+}
+catch {
+    Write-Host "⚠️ PM2 startup failed. Setting up Windows Task Scheduler instead..." -ForegroundColor Yellow
+    $setupSuccess = Setup-PM2WindowsStartup
+    
+    if (!$setupSuccess) {
+        Write-Host "⚠️ Warning: PM2 startup setup failed. Server will need to be started manually after reboot." -ForegroundColor Yellow
+    }
 }
 
 # Verify if the server is running
@@ -178,7 +252,12 @@ if ($pm2Status -match "posting-server.*online") {
 Write-Host "🔧 Setting up PM2 log rotation..." -ForegroundColor Yellow
 pm2 install pm2-logrotate
 pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 30
 pm2 set pm2-logrotate:compress true
+pm2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
+pm2 set pm2-logrotate:workerInterval 30
+pm2 set pm2-logrotate:rotateInterval "0 0 * * *"
+pm2 set pm2-logrotate:rotateModule true
 
 Write-Host "✅ Server started and configured to run on system boot!" -ForegroundColor Green
 Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
@@ -188,6 +267,11 @@ Write-Host "   - utils/" -ForegroundColor White
 Write-Host "   - server.js" -ForegroundColor White
 Write-Host "   - package.json" -ForegroundColor White
 Write-Host ""
+Write-Host "🔧 Windows Startup Information:" -ForegroundColor Yellow
+Write-Host "   - PM2 processes will auto-start on system boot via Windows Task Scheduler" -ForegroundColor White
+Write-Host "   - Task name: 'PM2 Posting Server Startup'" -ForegroundColor White
+Write-Host "   - You can view/manage the task in Windows Task Scheduler" -ForegroundColor White
+Write-Host ""
 Write-Host "To manage the server, use these PM2 commands:" -ForegroundColor Yellow
 Write-Host "  - pm2 status              # Check server status" -ForegroundColor White
 Write-Host "  - pm2 logs                # View all logs" -ForegroundColor White
@@ -195,3 +279,8 @@ Write-Host "  - pm2 logs posting-server # View posting server logs" -ForegroundC
 Write-Host "  - pm2 stop all           # Stop the server" -ForegroundColor White
 Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor White
 Write-Host "  - pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
+Write-Host ""
+Write-Host "To test auto-startup:" -ForegroundColor Cyan
+Write-Host "  1. Run 'pm2 save' to save current processes" -ForegroundColor White
+Write-Host "  2. Restart your computer" -ForegroundColor White
+Write-Host "  3. Check with 'pm2 status' after boot" -ForegroundColor White
