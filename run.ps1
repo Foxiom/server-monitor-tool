@@ -92,7 +92,8 @@ function Setup-PM2WindowsStartup {
             New-Item -ItemType Directory -Path $PM2Home -Force | Out-Null
         }
         
-        # Set PM2_HOME environment variable persistently for the user
+        # Set PM2_HOME environment variable persistently for the machine and current user
+        [System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::Machine)
         [System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::User)
         $env:PM2_HOME = $PM2Home
         
@@ -115,12 +116,18 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 Home: \`$env:PM2_HOME"
 Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] System uptime: \`$(Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime)"
 
+# Wait for system to stabilize
+Start-Sleep -Seconds 30
+
 # Change to posting server directory
 Set-Location "$PostingServerPath"
 Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Changed to directory: \`$(Get-Location)"
 
-# Wait a bit for system to stabilize
-Start-Sleep -Seconds 10
+# Check if Node.js and PM2 are available
+if (!(Test-Path (Join-Path `$env:PM2_HOME "node_modules"))) {
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 or Node.js not found, attempting to reload environment..."
+    `$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+}
 
 # Check if PM2 dump file exists
 `$dumpFile = Join-Path "$PM2Home" "dump.pm2"
@@ -186,12 +193,12 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         # Create new task with current user context
         $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
         $Trigger = New-ScheduledTaskTrigger -AtStartup
-        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
         
-        # Use current user instead of SYSTEM
-        $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" -LogonType Interactive -RunLevel Highest
+        # Use current user with proper credentials
+        $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" -LogonType Password -RunLevel Highest
         
-        Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal
+        Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -ErrorAction Stop
         
         Write-Host "✅ Windows Task Scheduler setup completed with user context!" -ForegroundColor Green
         Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
@@ -225,8 +232,9 @@ if (!(Test-Command "pm2")) {
     npm install -g pm2
 }
 
-# Set PM2_HOME environment variable persistently for the user
+# Set PM2_HOME environment variable persistently for the machine and current user
 $PM2Home = Join-Path $env:USERPROFILE ".pm2"
+[System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::Machine)
 [System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::User)
 $env:PM2_HOME = $PM2Home
 
