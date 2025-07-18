@@ -85,6 +85,16 @@ function Setup-PM2WindowsStartup {
         $CurrentDomain = $env:USERDOMAIN
         $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
         $LogPath = Join-Path $env:USERPROFILE "logs\pm2-startup.log"
+        $PM2Home = Join-Path $env:USERPROFILE ".pm2"
+        
+        # Ensure PM2_HOME directory exists
+        if (!(Test-Path $PM2Home)) {
+            New-Item -ItemType Directory -Path $PM2Home -Force | Out-Null
+        }
+        
+        # Set PM2_HOME environment variable persistently for the user
+        [System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::User)
+        $env:PM2_HOME = $PM2Home
         
         # Create logs directory if it doesn't exist
         $LogDir = Split-Path $LogPath -Parent
@@ -96,7 +106,7 @@ function Setup-PM2WindowsStartup {
         $StartupScript = @"
 # PM2 Startup Script for Posting Server - Fixed Version
 # Set PM2 home directory explicitly
-`$env:PM2_HOME = "`$env:USERPROFILE\.pm2"
+`$env:PM2_HOME = "$PM2Home"
 
 # Log startup attempt
 Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ==================================="
@@ -113,7 +123,7 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 Start-Sleep -Seconds 10
 
 # Check if PM2 dump file exists
-`$dumpFile = Join-Path `$env:PM2_HOME "dump.pm2"
+`$dumpFile = Join-Path "$PM2Home" "dump.pm2"
 if (Test-Path `$dumpFile) {
     Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 dump file found: `$dumpFile"
 } else {
@@ -142,7 +152,7 @@ try {
 }
 
 # If no processes found, try to start the server manually
-if (`$pm2List -match "No processes") {
+if (`$pm2List -match "0 processes") {
     Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] No processes found, starting server manually..."
     try {
         pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
@@ -161,7 +171,7 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         $ScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_startup.ps1"
         $StartupScript | Out-File -FilePath $ScriptPath -Encoding UTF8
         
-        # Create scheduled task to run as current user (not SYSTEM)
+        # Create scheduled task to run as current user
         $TaskName = "PM2 Posting Server Startup"
         $TaskDescription = "Start PM2 posting server on system boot"
         
@@ -213,6 +223,16 @@ if (!(Test-Command "git")) {
 if (!(Test-Command "pm2")) {
     Write-Host "📦 Installing PM2 globally..." -ForegroundColor Yellow
     npm install -g pm2
+}
+
+# Set PM2_HOME environment variable persistently for the user
+$PM2Home = Join-Path $env:USERPROFILE ".pm2"
+[System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::User)
+$env:PM2_HOME = $PM2Home
+
+# Ensure PM2_HOME directory exists
+if (!(Test-Path $PM2Home)) {
+    New-Item -ItemType Directory -Path $PM2Home -Force | Out-Null
 }
 
 # Remove existing posting_server directory if it exists
