@@ -296,8 +296,8 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
             Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
             
             return $true
-            
-        } catch {
+        }
+        catch {
             Write-Host "⚠️ PowerShell task creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
             Write-Host "🔄 Falling back to schtasks.exe..." -ForegroundColor Yellow
             
@@ -335,7 +335,8 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
                 Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
                 
                 return $true
-            } else {
+            }
+            else {
                 Write-Host "⚠️ schtasks fallback failed: $result" -ForegroundColor Red
                 return $false
             }
