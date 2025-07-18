@@ -158,10 +158,6 @@ function Setup-PM2WindowsStartup {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
         
-        # Prompt for password securely
-        $SecurePassword = Read-Host "Enter password for user $CurrentDomain\$CurrentUser" -AsSecureString
-        $Credential = New-Object System.Management.Automation.PSCredential ("$CurrentDomain\$CurrentUser", $SecurePassword)
-        
         # Create improved startup script with explicit PM2 home and environment
         $StartupScript = @"
 # PM2 Startup Script for Posting Server - Fixed Version
@@ -237,7 +233,7 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         $ScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_startup.ps1"
         $StartupScript | Out-File -FilePath $ScriptPath -Encoding UTF8
         
-        # Create scheduled task to run as current user with password
+        # Create scheduled task to run as current user
         $TaskName = "PM2 Posting Server Startup"
         $TaskDescription = "Start PM2 posting server on system boot"
         
@@ -249,23 +245,49 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
             # Task doesn't exist, continue
         }
         
-        # Create new task with current user context and credentials
-        $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
-        $Trigger = New-ScheduledTaskTrigger -AtStartup
-        $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+        # Create task using schtasks.exe for better compatibility
+        $TaskCommand = "schtasks /create /tn `"$TaskName`" /tr `"powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File \`"$ScriptPath\`"`" /sc onstart /ru `"$CurrentDomain\$CurrentUser`" /rl highest /f"
         
-        # Use current user with password
-        $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" -LogonType Password -RunLevel Highest
+        Write-Host "🔧 Creating scheduled task with command:" -ForegroundColor Yellow
+        Write-Host $TaskCommand -ForegroundColor Gray
         
-        Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -User "$CurrentDomain\$CurrentUser" -Password ($Credential.GetNetworkCredential().Password) -ErrorAction Stop
+        # Execute the schtasks command
+        $result = Invoke-Expression $TaskCommand 2>&1
         
-        Write-Host "✅ Windows Task Scheduler setup completed with user context!" -ForegroundColor Green
-        Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
-        Write-Host "📋 Running as: $CurrentDomain\$CurrentUser" -ForegroundColor Cyan
-        Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
-        Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
-        
-        return $true
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Windows Task Scheduler setup completed!" -ForegroundColor Green
+            Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
+            Write-Host "📋 Running as: $CurrentDomain\$CurrentUser" -ForegroundColor Cyan
+            Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
+            Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
+            
+            # Verify the task was created
+            $verifyResult = schtasks /query /tn "$TaskName" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Task verified successfully!" -ForegroundColor Green
+            }
+            
+            return $true
+        } else {
+            Write-Host "⚠️ Failed to create scheduled task. Output: $result" -ForegroundColor Yellow
+            
+            # Try alternative method using PowerShell cmdlets without password
+            try {
+                $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
+                $Trigger = New-ScheduledTaskTrigger -AtStartup
+                $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+                $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" -LogonType ServiceAccount -RunLevel Highest
+                
+                Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Force
+                
+                Write-Host "✅ Alternative method succeeded!" -ForegroundColor Green
+                return $true
+            }
+            catch {
+                Write-Host "⚠️ Alternative method also failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                return $false
+            }
+        }
     }
     catch {
         Write-Host "⚠️ Failed to setup Windows Task Scheduler: $($_.Exception.Message)" -ForegroundColor Yellow
