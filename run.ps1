@@ -17,6 +17,61 @@ function Cleanup {
     exit 1
 }
 
+# Enhanced cleanup function that handles running processes
+function Enhanced-Cleanup {
+    Write-Host "🔄 Performing enhanced cleanup..." -ForegroundColor Yellow
+    
+    # Stop PM2 processes first
+    try {
+        Write-Host "🛑 Stopping existing PM2 processes..." -ForegroundColor Yellow
+        pm2 stop posting-server 2>$null
+        pm2 delete posting-server 2>$null
+        Start-Sleep -Seconds 3
+    }
+    catch {
+        Write-Host "⚠️ PM2 cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    
+    # Force stop any Node.js processes that might be locking the directory
+    try {
+        Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*posting_server*" } | Stop-Process -Force
+        Start-Sleep -Seconds 2
+    }
+    catch {
+        Write-Host "⚠️ Process cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    
+    # Remove the directory with multiple attempts
+    if (Test-Path "posting_server") {
+        Write-Host "🗑️ Removing existing posting_server directory..." -ForegroundColor Yellow
+        
+        $attempts = 0
+        $maxAttempts = 5
+        
+        while ((Test-Path "posting_server") -and ($attempts -lt $maxAttempts)) {
+            try {
+                Remove-Item -Recurse -Force "posting_server" -ErrorAction Stop
+                Write-Host "✅ Directory removed successfully!" -ForegroundColor Green
+                break
+            }
+            catch {
+                $attempts++
+                Write-Host "⚠️ Attempt $attempts failed: $($_.Exception.Message)" -ForegroundColor Yellow
+                
+                if ($attempts -lt $maxAttempts) {
+                    Write-Host "🔄 Retrying in 3 seconds..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds 3
+                }
+                else {
+                    Write-Host "❌ Failed to remove directory after $maxAttempts attempts" -ForegroundColor Red
+                    Write-Host "💡 Try running PowerShell as Administrator or manually remove the directory" -ForegroundColor Cyan
+                    throw "Directory removal failed"
+                }
+            }
+        }
+    }
+}
+
 # Set up error handling
 trap { Cleanup }
 
@@ -247,10 +302,9 @@ if (!(Test-Path $PM2Home)) {
     New-Item -ItemType Directory -Path $PM2Home -Force | Out-Null
 }
 
-# Remove existing posting_server directory if it exists
+# Use Enhanced-Cleanup instead of the simple directory removal
 if (Test-Path "posting_server") {
-    Write-Host "🗑️ Removing existing posting_server directory..." -ForegroundColor Yellow
-    Remove-Item -Recurse -Force "posting_server"
+    Enhanced-Cleanup
 }
 
 # Create logs directory if it doesn't exist
