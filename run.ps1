@@ -340,24 +340,6 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
                 return $false
             }
         }
-            
-            # Try alternative method using PowerShell cmdlets without password
-            try {
-                $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
-                $Trigger = New-ScheduledTaskTrigger -AtStartup
-                $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
-                $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" -LogonType ServiceAccount -RunLevel Highest
-                
-                Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Force
-                
-                Write-Host "✅ Alternative method succeeded!" -ForegroundColor Green
-                return $true
-            }
-            catch {
-                Write-Host "⚠️ Alternative method also failed: $($_.Exception.Message)" -ForegroundColor Yellow
-                return $false
-            }
-        }
     }
     catch {
         Write-Host "⚠️ Failed to setup Windows Task Scheduler: $($_.Exception.Message)" -ForegroundColor Yellow
