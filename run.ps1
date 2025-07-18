@@ -245,40 +245,101 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
             # Task doesn't exist, continue
         }
         
-        # Create task using schtasks.exe for better compatibility
+        # Create task using PowerShell's scheduled task cmdlets for better reliability
         Write-Host "🔧 Creating scheduled task..." -ForegroundColor Yellow
         
-        $schtasksArgs = @(
-            "/create",
-            "/tn", "$TaskName",
-            "/tr", "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`"",
-            "/sc", "onstart",
-            "/ru", "$CurrentDomain\$CurrentUser",
-            "/rl", "highest",
-            "/f"
-        )
-        
-        Write-Host "Command: schtasks $($schtasksArgs -join ' ')" -ForegroundColor Gray
-        
-        # Execute the schtasks command with proper argument passing
-        $result = & schtasks.exe $schtasksArgs 2>&1
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "✅ Windows Task Scheduler setup completed!" -ForegroundColor Green
+        # First try using PowerShell's native scheduled task cmdlets
+        try {
+            # Clean up existing task if it exists
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+            
+            # Create the action to run the PowerShell script
+            $Action = New-ScheduledTaskAction -Execute "powershell.exe" `
+                      -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`"" `
+                      -WorkingDirectory $env:USERPROFILE
+            
+            # Create a trigger that starts at system startup and delays for 2 minutes to ensure system is ready
+            $Trigger = New-ScheduledTaskTrigger -AtStartup
+            $Trigger.Delay = "PT2M"  # 2 minute delay after startup
+            
+            # Task settings - allow task to run on batteries, don't stop on battery operation
+            # and allow running if network is available
+            $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                         -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 0) `
+                         -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+                         -RunOnlyIfNetworkAvailable:$false
+            
+            # Run with highest privileges
+            $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" `
+                         -LogonType Interactive `
+                         -RunLevel Highest
+            
+            # Register the task
+            Register-ScheduledTask -TaskName $TaskName `
+                                  -Description $TaskDescription `
+                                  -Action $Action `
+                                  -Trigger $Trigger `
+                                  -Settings $Settings `
+                                  -Principal $Principal `
+                                  -Force | Out-Null
+                                  
+            Write-Host "✅ Task created using PowerShell scheduled task cmdlets" -ForegroundColor Green
+            
+            # Verify the task was created
+            $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+            Write-Host "✅ Task verified: $($task.State)" -ForegroundColor Green
+            
+            # Show task details
             Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
             Write-Host "📋 Running as: $CurrentDomain\$CurrentUser" -ForegroundColor Cyan
             Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
             Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
             
-            # Verify the task was created
-            $verifyResult = schtasks /query /tn "$TaskName" 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Task verified successfully!" -ForegroundColor Green
-            }
-            
             return $true
-        } else {
-            Write-Host "⚠️ Failed to create scheduled task. Output: $result" -ForegroundColor Yellow
+            
+        } catch {
+            Write-Host "⚠️ PowerShell task creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "🔄 Falling back to schtasks.exe..." -ForegroundColor Yellow
+            
+            # Fall back to schtasks.exe if PowerShell cmdlets fail
+            $schtasksArgs = @(
+                "/create",
+                "/tn", "$TaskName",
+                "/tr", "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`"",
+                "/sc", "onstart",
+                "/ru", "$CurrentDomain\$CurrentUser",
+                "/rl", "highest",
+                "/delay", "0002:00",  # 2 minute delay
+                "/it",   # Run only when user is logged on interactively
+                "/f"
+            )
+            
+            Write-Host "Command: schtasks $($schtasksArgs -join ' ')" -ForegroundColor Gray
+            
+            # Execute the schtasks command with proper argument passing
+            $result = & schtasks.exe $schtasksArgs 2>&1
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Task created using schtasks.exe" -ForegroundColor Green
+                
+                # Verify the task was created
+                $verifyResult = schtasks /query /tn "$TaskName" 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "✅ Task verified successfully!" -ForegroundColor Green
+                }
+                
+                # Show task details
+                Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
+                Write-Host "📋 Running as: $CurrentDomain\$CurrentUser" -ForegroundColor Cyan
+                Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
+                Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
+                
+                return $true
+            } else {
+                Write-Host "⚠️ schtasks fallback failed: $result" -ForegroundColor Red
+                return $false
+            }
+        }
             
             # Try alternative method using PowerShell cmdlets without password
             try {
