@@ -246,13 +246,22 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         }
         
         # Create task using schtasks.exe for better compatibility
-        $TaskCommand = "schtasks /create /tn `"$TaskName`" /tr `"powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File \`"$ScriptPath\`"`" /sc onstart /ru `"$CurrentDomain\$CurrentUser`" /rl highest /f"
+        Write-Host "🔧 Creating scheduled task..." -ForegroundColor Yellow
         
-        Write-Host "🔧 Creating scheduled task with command:" -ForegroundColor Yellow
-        Write-Host $TaskCommand -ForegroundColor Gray
+        $schtasksArgs = @(
+            "/create",
+            "/tn", "$TaskName",
+            "/tr", "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`"",
+            "/sc", "onstart",
+            "/ru", "$CurrentDomain\$CurrentUser",
+            "/rl", "highest",
+            "/f"
+        )
         
-        # Execute the schtasks command
-        $result = Invoke-Expression $TaskCommand 2>&1
+        Write-Host "Command: schtasks $($schtasksArgs -join ' ')" -ForegroundColor Gray
+        
+        # Execute the schtasks command with proper argument passing
+        $result = & schtasks.exe $schtasksArgs 2>&1
         
         if ($LASTEXITCODE -eq 0) {
             Write-Host "✅ Windows Task Scheduler setup completed!" -ForegroundColor Green
