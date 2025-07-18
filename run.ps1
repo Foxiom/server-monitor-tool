@@ -103,6 +103,10 @@ function Setup-PM2WindowsStartup {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
         
+        # Prompt for password securely
+        $SecurePassword = Read-Host "Enter password for user $CurrentDomain\$CurrentUser" -AsSecureString
+        $Credential = New-Object System.Management.Automation.PSCredential ("$CurrentDomain\$CurrentUser", $SecurePassword)
+        
         # Create improved startup script with explicit PM2 home and environment
         $StartupScript = @"
 # PM2 Startup Script for Posting Server - Fixed Version
@@ -178,7 +182,7 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
         $ScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_startup.ps1"
         $StartupScript | Out-File -FilePath $ScriptPath -Encoding UTF8
         
-        # Create scheduled task to run as current user
+        # Create scheduled task to run as current user with password
         $TaskName = "PM2 Posting Server Startup"
         $TaskDescription = "Start PM2 posting server on system boot"
         
@@ -190,15 +194,15 @@ Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
             # Task doesn't exist, continue
         }
         
-        # Create new task with current user context
+        # Create new task with current user context and credentials
         $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
         $Trigger = New-ScheduledTaskTrigger -AtStartup
         $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
         
-        # Use current user with proper credentials
+        # Use current user with password
         $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" -LogonType Password -RunLevel Highest
         
-        Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -ErrorAction Stop
+        Register-ScheduledTask -TaskName $TaskName -Description $TaskDescription -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -User "$CurrentDomain\$CurrentUser" -Password ($Credential.GetNetworkCredential().Password) -ErrorAction Stop
         
         Write-Host "✅ Windows Task Scheduler setup completed with user context!" -ForegroundColor Green
         Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
