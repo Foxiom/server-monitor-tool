@@ -209,7 +209,10 @@ function Setup-PM2WindowsService {
         $CurrentUser = $env:USERNAME
         $CurrentDomain = $env:USERDOMAIN
         $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
-        $LogPath = Join-Path $env:USERPROFILE "logs\pm2-service.log"
+        $LogDir = Join-Path $env:USERPROFILE "logs"
+        $LogPath = Join-Path $LogDir "pm2-service.log"
+        $StdoutLogPath = Join-Path $LogDir "pm2-service-stdout.log"
+        $StderrLogPath = Join-Path $LogDir "pm2-service-stderr.log"
         $PM2Home = Join-Path $env:USERPROFILE ".pm2"
         $ServiceName = "PM2PostingServer"
         $ServiceDisplayName = "PM2 Posting Server"
@@ -240,23 +243,31 @@ setlocal EnableExtensions EnableDelayedExpansion
 REM Set PM2_HOME environment variable
 set PM2_HOME=$PM2Home
 
+REM Create a function for safe logging to avoid file locking issues
+:log_message
+set "msg=%~1"
+for /f "tokens=1-2 delims= " %%a in ('%date% %time%') do (
+    echo [%%a %%b] %msg%>> "$LogPath" 2>nul
+)
+goto :eof
+
 REM Log startup
-echo [%date% %time%] ===================================>> "$LogPath"
-echo [%date% %time%] PM2 Posting Server Service Started>> "$LogPath"
-echo [%date% %time%] Current User: %USERNAME%>> "$LogPath"
-echo [%date% %time%] PM2 Home: %PM2_HOME%>> "$LogPath"
-echo [%date% %time%] Working Directory: $PostingServerPath>> "$LogPath"
+call :log_message "==================================="
+call :log_message "PM2 Posting Server Service Started"
+call :log_message "Current User: %USERNAME%"
+call :log_message "PM2 Home: %PM2_HOME%"
+call :log_message "Working Directory: $PostingServerPath"
 
 REM Change to posting server directory
 cd /d "$PostingServerPath"
 if %errorlevel% neq 0 (
-    echo [%date% %time%] ERROR: Failed to change directory>> "$LogPath"
+    call :log_message "ERROR: Failed to change directory"
     exit /b 1
 )
 
 REM Wait for system to stabilize
 timeout /t 30 /nobreak >nul
-echo [%date% %time%] System stabilization wait completed>> "$LogPath"
+call :log_message "System stabilization wait completed"
 
 REM Load environment PATH
 for /f "tokens=2*" %%i in ('reg query "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "MachinePath=%%j"
@@ -266,52 +277,144 @@ set "PATH=%MachinePath%;%UserPath%"
 REM Check if PM2 is available
 pm2 -v >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [%date% %time%] ERROR: PM2 not found in PATH>> "$LogPath"
+    call :log_message "ERROR: PM2 not found in PATH"
     exit /b 1
 )
 
 REM Get PM2 version
 for /f "delims=" %%i in ('pm2 -v 2^>^&1') do set pm2version=%%i
-echo [%date% %time%] PM2 version: %pm2version%>> "$LogPath"
+call :log_message "PM2 version: %pm2version%"
+
+REM Enhanced PM2 resurrection and startup logic for server monitoring
+REM First, clean up any orphaned PM2 processes
+call :log_message "Cleaning up any orphaned PM2 processes..."
+pm2 kill >nul 2>&1
+timeout /t 5 /nobreak >nul
+
+REM Initialize PM2 daemon
+call :log_message "Initializing PM2 daemon..."
+pm2 ping >nul 2>&1
+if %errorlevel% neq 0 (
+    call :log_message "PM2 daemon not responding, force starting..."
+    pm2 start ecosystem.config.js >nul 2>&1
+    timeout /t 5 /nobreak >nul
+)
 
 REM Check if PM2 dump file exists and try to resurrect
 if exist "%PM2_HOME%\dump.pm2" (
-    echo [%date% %time%] PM2 dump file found, attempting resurrect...>> "$LogPath"
-    pm2 resurrect >> "$LogPath" 2>&1
-    timeout /t 10 /nobreak >nul
+    call :log_message "PM2 dump file found, attempting resurrect..."
+    pm2 resurrect >nul 2>&1
+    timeout /t 15 /nobreak >nul
+    call :log_message "PM2 resurrect completed"
 ) else (
-    echo [%date% %time%] No PM2 dump file found>> "$LogPath"
+    call :log_message "No PM2 dump file found, will start fresh"
 )
 
-REM Check if posting-server is running
+REM Check if posting-server is running after resurrection
 pm2 list --no-colors > "%TEMP%\pm2list.txt" 2>&1
 findstr "posting-server.*online" "%TEMP%\pm2list.txt" >nul
 if %errorlevel% neq 0 (
-    echo [%date% %time%] Posting server not running, starting manually...>> "$LogPath"
-    pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 >> "$LogPath" 2>&1
-    pm2 save >> "$LogPath" 2>&1
-    echo [%date% %time%] Posting server started and saved>> "$LogPath"
+    call :log_message "Posting server not running, starting manually..."
     
-    REM Verify it started
-    pm2 list --no-colors >> "$LogPath" 2>&1
+    REM Stop any existing posting-server instances first
+    pm2 stop posting-server >nul 2>&1
+    pm2 delete posting-server >nul 2>&1
+    timeout /t 3 /nobreak >nul
+    
+    REM Start fresh posting-server instance
+    pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >nul 2>&1
+    if %errorlevel% equ 0 (
+        call :log_message "Posting server started successfully"
+        pm2 save >nul 2>&1
+        call :log_message "PM2 configuration saved"
+    ) else (
+        call :log_message "ERROR: Failed to start posting server"
+        REM Try alternative startup method
+        call :log_message "Attempting alternative startup method..."
+        pm2 start server.js --name "posting-server-backup" >nul 2>&1
+        pm2 save >nul 2>&1
+    )
+    
+    REM Verify it started with multiple attempts
+    set /a attempt=0
+    :verify_loop
+    set /a attempt+=1
+    timeout /t 5 /nobreak >nul
+    pm2 list --no-colors > "%TEMP%\pm2verify.txt" 2>&1
+    findstr "posting-server.*online" "%TEMP%\pm2verify.txt" >nul
+    if %errorlevel% equ 0 (
+        call :log_message "Posting server verified online after %attempt% attempts"
+        goto :verified
+    )
+    if %attempt% lss 3 goto :verify_loop
+    call :log_message "WARNING: Posting server failed to start after 3 attempts"
+    :verified
 ) else (
-    echo [%date% %time%] Posting server already running>> "$LogPath"
+    call :log_message "Posting server already running after resurrection"
 )
 
-echo [%date% %time%] PM2 Posting Server Service initialization completed>> "$LogPath"
-echo [%date% %time%] ===================================>> "$LogPath"
+REM Enable PM2 startup for future reboots
+call :log_message "Configuring PM2 startup for future reboots..."
+pm2 startup >nul 2>&1
+pm2 save >nul 2>&1
 
-REM Keep the service running - monitor PM2 processes
+call :log_message "PM2 Posting Server Service initialization completed"
+call :log_message "==================================="
+
+REM Keep the service running - enhanced monitoring for server monitoring tool
 :monitor_loop
 timeout /t 60 /nobreak >nul
+
+REM Check if PM2 daemon is still alive
+pm2 ping >nul 2>&1
+if %errorlevel% neq 0 (
+    call :log_message "WARNING: PM2 daemon not responding, reinitializing..."
+    pm2 kill >nul 2>&1
+    timeout /t 5 /nobreak >nul
+    pm2 resurrect >nul 2>&1
+    timeout /t 10 /nobreak >nul
+)
 
 REM Check if posting-server process is still running
 pm2 list --no-colors > "%TEMP%\pm2status.txt" 2>&1
 findstr "posting-server.*online" "%TEMP%\pm2status.txt" >nul
 if %errorlevel% neq 0 (
-    echo [%date% %time%] WARNING: Posting server not online, attempting restart...>> "$LogPath"
-    pm2 restart posting-server >> "$LogPath" 2>&1
-    pm2 save >> "$LogPath" 2>&1
+    call :log_message "WARNING: Posting server not online, attempting recovery..."
+    
+    REM Try restart first
+    pm2 restart posting-server >nul 2>&1
+    timeout /t 10 /nobreak >nul
+    
+    REM Verify restart worked
+    pm2 list --no-colors > "%TEMP%\pm2restart_check.txt" 2>&1
+    findstr "posting-server.*online" "%TEMP%\pm2restart_check.txt" >nul
+    if %errorlevel% neq 0 (
+        call :log_message "Restart failed, attempting fresh start..."
+        pm2 stop posting-server >nul 2>&1
+        pm2 delete posting-server >nul 2>&1
+        timeout /t 3 /nobreak >nul
+        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >nul 2>&1
+        pm2 save >nul 2>&1
+        call :log_message "Fresh posting server instance started"
+    ) else (
+        call :log_message "Posting server restart successful"
+    )
+    pm2 save >nul 2>&1
+) else (
+    REM Server is running, log periodic health check
+    for /f "tokens=1-2 delims= " %%a in ('%date% %time%') do set current_time=%%a %%b
+    if defined last_health_log (
+        REM Only log health status every 10 minutes to avoid log spam
+        set /a health_counter+=1
+        if !health_counter! geq 10 (
+            call :log_message "Health check: Posting server running normally"
+            set health_counter=0
+        )
+    ) else (
+        call :log_message "Health check: Posting server running normally"
+        set health_counter=0
+    )
+    set last_health_log=!current_time!
 )
 
 goto monitor_loop
@@ -356,14 +459,23 @@ goto monitor_loop
         & nssm set $ServiceName Description $ServiceDescription | Out-Null
         & nssm set $ServiceName Start SERVICE_AUTO_START | Out-Null
         & nssm set $ServiceName AppDirectory $PostingServerPath | Out-Null
-        & nssm set $ServiceName AppStdout $LogPath | Out-Null
-        & nssm set $ServiceName AppStderr $LogPath | Out-Null
+        
+        # Separate stdout and stderr to avoid file locking conflicts
+        & nssm set $ServiceName AppStdout $StdoutLogPath | Out-Null
+        & nssm set $ServiceName AppStderr $StderrLogPath | Out-Null
         & nssm set $ServiceName AppStdoutCreationDisposition 4 | Out-Null
         & nssm set $ServiceName AppStderrCreationDisposition 4 | Out-Null
+        
+        # Configure log rotation to prevent large files
         & nssm set $ServiceName AppRotateFiles 1 | Out-Null
         & nssm set $ServiceName AppRotateOnline 1 | Out-Null
-        & nssm set $ServiceName AppRotateSeconds 86400 | Out-Null
-        & nssm set $ServiceName AppRotateBytes 1048576 | Out-Null
+        & nssm set $ServiceName AppRotateSeconds 86400 | Out-Null  # Daily rotation
+        & nssm set $ServiceName AppRotateBytes 10485760 | Out-Null  # 10MB max size
+        
+        # Set service to restart on failure
+        & nssm set $ServiceName AppExit Default Restart | Out-Null
+        & nssm set $ServiceName AppRestartDelay 5000 | Out-Null  # 5 second delay
+        & nssm set $ServiceName AppThrottle 10000 | Out-Null     # 10 second throttle
         
         Write-Host "✅ Windows service created successfully with NSSM!" -ForegroundColor Green
         
@@ -394,7 +506,9 @@ goto monitor_loop
         Write-Host "   Display Name: $ServiceDisplayName" -ForegroundColor White
         Write-Host "   Startup Type: Automatic" -ForegroundColor White
         Write-Host "   Service Script: $BatchScriptPath" -ForegroundColor White
-        Write-Host "   Service Log: $LogPath" -ForegroundColor White
+        Write-Host "   Batch Script Log: $LogPath" -ForegroundColor White
+        Write-Host "   Service Stdout Log: $StdoutLogPath" -ForegroundColor White
+        Write-Host "   Service Stderr Log: $StderrLogPath" -ForegroundColor White
         Write-Host "   Service Manager: NSSM" -ForegroundColor White
         Write-Host ""
         Write-Host "🔧 Service Management Commands:" -ForegroundColor Yellow
