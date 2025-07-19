@@ -92,48 +92,75 @@ function Install-Git {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
-# Function to create Windows Task Scheduler entry for PM2
-function Set-PM2StartupTask {
-    Write-Host "🔧 Setting up PM2 to start on system boot using Task Scheduler..." -ForegroundColor Yellow
+# Function to install PM2 as a Windows Service using pm2-installer
+function Install-PM2Service {
+    Write-Host "🔧 Setting up PM2 as a Windows Service using pm2-installer..." -ForegroundColor Yellow
     
     if (-not (Test-Administrator)) {
-        Write-Host "⚠️ Administrator privileges required for Task Scheduler setup." -ForegroundColor Yellow
-        Write-Host "Please run this script as Administrator or manually set up PM2 startup." -ForegroundColor Yellow
+        Write-Host "⚠️ Administrator privileges required for PM2 service installation." -ForegroundColor Yellow
+        Write-Host "Please run this script as Administrator to install PM2 as a service." -ForegroundColor Yellow
+        Write-Host "Falling back to basic PM2 save..." -ForegroundColor Yellow
         return
     }
     
     try {
-        # Get current user and node/pm2 paths
-        $currentUser = $env:USERNAME
-        $nodePath = (Get-Command node).Source
-        $pm2Path = (Get-Command pm2).Source
-        $currentDir = Get-Location
+        Write-Host "⬇️ Downloading pm2-installer..." -ForegroundColor Cyan
         
-        # Create a batch file to run PM2 resurrect
-        $batchContent = @"
-@echo off
-cd /d "$currentDir"
-"$nodePath" "$pm2Path" resurrect
-"@
-        $batchPath = Join-Path $currentDir "pm2-startup.bat"
-        Set-Content -Path $batchPath -Value $batchContent -Encoding ASCII
+        # Download pm2-installer
+        $pm2InstallerPath = Join-Path (Get-Location) "pm2-installer-main"
+        if (Test-Path $pm2InstallerPath) {
+            Remove-Item $pm2InstallerPath -Recurse -Force
+        }
         
-        # Create the scheduled task
-        $action = New-ScheduledTaskAction -Execute $batchPath
-        $trigger = New-ScheduledTaskTrigger -AtStartup
-        $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType ServiceAccount -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        # Download and extract pm2-installer
+        $installerZip = Join-Path (Get-Location) "pm2-installer.zip"
+        Invoke-WebRequest -Uri "https://github.com/jessety/pm2-installer/archive/main.zip" -OutFile $installerZip -UseBasicParsing
+        Expand-Archive -Path $installerZip -DestinationPath (Get-Location) -Force
+        Remove-Item $installerZip -Force
         
-        # Register the task
-        $taskName = "PM2-PostingServer-Startup"
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+        # Navigate to pm2-installer directory
+        Push-Location $pm2InstallerPath
         
-        Write-Host "✅ Task Scheduler entry '$taskName' created successfully." -ForegroundColor Green
-        Write-Host "PM2 will now automatically start your processes on system boot." -ForegroundColor Green
+        Write-Host "🔧 Configuring npm for service installation..." -ForegroundColor Yellow
+        
+        # Configure npm and PowerShell policy
+        try {
+            & npm run configure 2>&1 | Out-Host
+            & npm run configure-policy 2>&1 | Out-Host
+        }
+        catch {
+            Write-Host "⚠️ NPM configuration completed with warnings, proceeding..." -ForegroundColor Yellow
+        }
+        
+        Write-Host "🚀 Installing PM2 as Windows Service..." -ForegroundColor Green
+        
+        # Install PM2 service
+        & npm run setup 2>&1 | Out-Host
+        
+        Write-Host "✅ PM2 installed as Windows Service successfully!" -ForegroundColor Green
+        Write-Host "PM2 will now run as a service and persist across reboots." -ForegroundColor Green
+        
+        # Return to original directory
+        Pop-Location
+        
+        # Clean up installer directory
+        Remove-Item $pm2InstallerPath -Recurse -Force -ErrorAction SilentlyContinue
+        
+        return $true
+        
     }
     catch {
-        Write-Host "⚠️ Failed to create Task Scheduler entry: $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-Host "You can manually run 'pm2 save' and 'pm2 resurrect' after system restart." -ForegroundColor Yellow
+        Write-Host "⚠️ Failed to install PM2 service: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "Falling back to basic PM2 save. You may need to manually start PM2 after reboot." -ForegroundColor Yellow
+        
+        # Clean up on error
+        if (Get-Location | Select-String "pm2-installer") {
+            Pop-Location -ErrorAction SilentlyContinue
+        }
+        Remove-Item $pm2InstallerPath -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item $installerZip -Force -ErrorAction SilentlyContinue
+        
+        return $false
     }
 }
 
@@ -220,8 +247,8 @@ try {
     Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
     pm2 save
     
-    # Setup PM2 to start on system boot (Windows-specific approach)
-    Set-PM2StartupTask
+    # Setup PM2 to start on system boot using pm2-installer (Windows Service approach)
+    $serviceInstalled = Install-PM2Service
     
     # Verify if the server is running using our custom function
     Write-Host "🔍 Verifying server status..." -ForegroundColor Yellow
@@ -274,11 +301,21 @@ try {
     Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor White
     Write-Host "  - pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
     Write-Host "" -ForegroundColor White
-    Write-Host "Windows-specific notes:" -ForegroundColor Yellow
-    Write-Host "  - PM2 startup is handled via Windows Task Scheduler" -ForegroundColor White
-    Write-Host "  - Task name: 'PM2-PostingServer-Startup'" -ForegroundColor White
-    Write-Host "  - To manually manage startup: taskschd.msc" -ForegroundColor White
-    Write-Host "  - Alternative: Use 'pm2-windows-service' for Windows Service integration" -ForegroundColor White
+    
+    if ($serviceInstalled) {
+        Write-Host "Windows Service Integration:" -ForegroundColor Green
+        Write-Host "  ✅ PM2 installed as Windows Service (Local Service user)" -ForegroundColor White
+        Write-Host "  ✅ Automatic startup on system boot (no user login required)" -ForegroundColor White
+        Write-Host "  ✅ Persists across reboots and user sessions" -ForegroundColor White
+        Write-Host "  - Use 'services.msc' to manage the PM2 Windows Service" -ForegroundColor White
+        Write-Host "  - PM2 commands require Administrator privileges" -ForegroundColor White
+    } else {
+        Write-Host "Startup Configuration:" -ForegroundColor Yellow
+        Write-Host "  ⚠️ PM2 service installation failed or was skipped" -ForegroundColor White
+        Write-Host "  - You may need to manually start PM2 after system reboot" -ForegroundColor White
+        Write-Host "  - Run 'pm2 resurrect' after reboot to restore processes" -ForegroundColor White
+        Write-Host "  - Consider running this script as Administrator for service installation" -ForegroundColor White
+    }
 }
 catch {
     Write-Host "❌ Script execution failed: $($_.Exception.Message)" -ForegroundColor Red
