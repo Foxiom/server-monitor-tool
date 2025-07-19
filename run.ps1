@@ -289,6 +289,9 @@ echo [%date% %time%] Resurrecting PM2 processes... >> "$LogPath"
 echo [%date% %time%] Starting posting-server... >> "$LogPath"
 %PM2_CMD% start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >> "$LogPath" 2>&1
 
+echo [%date% %time%] Starting PM2 web interface on port 9615... >> "$LogPath"
+%PM2_CMD% web >> "$LogPath" 2>&1
+
 echo [%date% %time%] Saving PM2 process list... >> "$LogPath"
 %PM2_CMD% save >> "$LogPath" 2>&1
 
