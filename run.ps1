@@ -658,6 +658,9 @@ Write-Host "🚀 Starting posting server with PM2..." -ForegroundColor Green
 pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
 
 # Save PM2 process list
+Write-Host "💾 Startup PM2 process list..." -ForegroundColor Yellow
+pm2 startup
+
 Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
 pm2 save
 
