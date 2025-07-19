@@ -268,10 +268,18 @@ REM Check if PM2 is accessible
 where pm2 >nul 2>&1
 if %errorlevel% neq 0 (
     echo [%date% %time%] PM2 not found in PATH, trying full path... >> "$LogPath"
-    set PM2_CMD="$npmGlobalPath\pm2.cmd"
+    set "PM2_CMD=$npmGlobalPath\pm2.cmd"
 ) else (
     echo [%date% %time%] PM2 found in PATH >> "$LogPath"
     set PM2_CMD=pm2
+)
+
+REM Verify PM2 command works
+echo [%date% %time%] Testing PM2 command: %PM2_CMD% >> "$LogPath"
+"%PM2_CMD%" --version >> "$LogPath" 2>&1
+if %errorlevel% neq 0 (
+    echo [%date% %time%] PM2 command test failed, exiting... >> "$LogPath"
+    exit /b 1
 )
 
 REM Start PM2 processes
