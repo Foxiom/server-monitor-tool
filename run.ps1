@@ -1,226 +1,255 @@
-# Exit on error
+# PowerShell script for setting up posting server on Windows
+# Requires PowerShell 5.0 or later
+
+param(
+    [switch]$Force = $false
+)
+
+# Set error action preference
 $ErrorActionPreference = "Stop"
 
 # Function to clean up on error
 function Cleanup {
+    Write-Host "❌ An error occurred. Cleaning up..." -ForegroundColor Red
     if (Test-Path "posting_server") {
-        Write-Host "❌ An error occurred. Cleaning up..."
         Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
     }
-    if ($env:TEMP_DIR -and (Test-Path $env:TEMP_DIR)) {
-        Remove-Item -Recurse -Force $env:TEMP_DIR -ErrorAction SilentlyContinue
+    if ($script:TEMP_DIR -and (Test-Path $script:TEMP_DIR)) {
+        Remove-Item -Recurse -Force $script:TEMP_DIR -ErrorAction SilentlyContinue
     }
     exit 1
 }
 
 # Set up error handling
-$Global:ErrorActionPreference = "Stop"
 trap { Cleanup }
 
 # Function to check if a command exists
-function Command-Exists {
-    param ($command)
-    return Get-Command $command -ErrorAction SilentlyContinue
+function Test-Command {
+    param($CommandName)
+    $null -ne (Get-Command $CommandName -ErrorAction SilentlyContinue)
 }
 
 # Function to install Node.js
-function Install-NodeJs {
-    Write-Host "📦 Installing Node.js..."
-    if (-not (Command-Exists winget)) {
-        Write-Host "❌ Winget is required to install Node.js. Please install winget first."
+function Install-NodeJS {
+    Write-Host "📦 Installing Node.js..." -ForegroundColor Yellow
+    
+    # Check if Chocolatey is available
+    if (Test-Command choco) {
+        choco install nodejs -y
+    } elseif (Test-Command winget) {
+        winget install OpenJS.NodeJS
+    } else {
+        Write-Host "❌ Please install Node.js manually from https://nodejs.org/" -ForegroundColor Red
+        Write-Host "   Or install Chocolatey/winget package manager first" -ForegroundColor Yellow
         exit 1
     }
-    winget install OpenJS.NodeJS --version 18
+    
+    # Refresh PATH
+    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
 }
 
 # Function to install Git
 function Install-Git {
-    Write-Host "📦 Installing Git..."
-    if (-not (Command-Exists winget)) {
-        Write-Host "❌ Winget is required to install Git. Please install winget first."
+    Write-Host "📦 Installing Git..." -ForegroundColor Yellow
+    
+    # Check if Chocolatey is available
+    if (Test-Command choco) {
+        choco install git -y
+    } elseif (Test-Command winget) {
+        winget install Git.Git
+    } else {
+        Write-Host "❌ Please install Git manually from https://git-scm.com/" -ForegroundColor Red
+        Write-Host "   Or install Chocolatey/winget package manager first" -ForegroundColor Yellow
         exit 1
     }
-    winget install Git.Git
+    
+    # Refresh PATH
+    $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
 }
 
+# Function to create scheduled task for PM2 resurrection
+function Create-PM2StartupTask {
+    Write-Host "🔧 Setting up PM2 to start on system boot using Task Scheduler..." -ForegroundColor Yellow
+    
+    # Get PM2 and Node paths
+    $nodePath = (Get-Command node).Source
+    $pm2Path = (Get-Command pm2).Source
+    
+    # Create a batch file that will run PM2 resurrect
+    $batchContent = @"
+@echo off
+timeout /t 30 /nobreak >nul
+cd /d "$PWD"
+"$nodePath" "$pm2Path" resurrect
+"$nodePath" "$pm2Path" save
+"@
+    
+    $batchFilePath = Join-Path $PWD "pm2-startup.bat"
+    $batchContent | Out-File -FilePath $batchFilePath -Encoding ASCII
+    
+    # Create the scheduled task
+    $taskName = "PM2-AutoStart"
+    $taskDescription = "Automatically start PM2 processes on system startup"
+    
+    # Remove existing task if it exists
+    try {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    } catch {}
+    
+    # Create new scheduled task
+    $action = New-ScheduledTaskAction -Execute $batchFilePath
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = "PT1M"  # 1 minute delay after startup
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+    
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description $taskDescription
+    
+    Write-Host "✅ Scheduled task '$taskName' created successfully!" -ForegroundColor Green
+    Write-Host "   Batch file created at: $batchFilePath" -ForegroundColor Cyan
+}
+
+# Main script execution
+Write-Host "🚀 Starting Windows Posting Server Setup..." -ForegroundColor Green
+Write-Host "=================================================" -ForegroundColor Green
+
 # Check and install Node.js if not present
-if (-not (Command-Exists node)) {
-    Write-Host "❌ Node.js is not installed."
-    Install-NodeJs
+if (-not (Test-Command node)) {
+    Write-Host "❌ Node.js is not installed." -ForegroundColor Red
+    Install-NodeJS
+    Start-Sleep -Seconds 2
+}
+
+# Verify Node.js installation
+if (-not (Test-Command node)) {
+    Write-Host "❌ Node.js installation failed or PATH not updated. Please restart PowerShell and try again." -ForegroundColor Red
+    exit 1
 }
 
 # Check and install Git if not present
-if (-not (Command-Exists git)) {
-    Write-Host "❌ Git is not installed."
+if (-not (Test-Command git)) {
+    Write-Host "❌ Git is not installed." -ForegroundColor Red
     Install-Git
+    Start-Sleep -Seconds 2
+}
+
+# Verify Git installation
+if (-not (Test-Command git)) {
+    Write-Host "❌ Git installation failed or PATH not updated. Please restart PowerShell and try again." -ForegroundColor Red
+    exit 1
 }
 
 # Check if PM2 is installed, if not install it globally
-if (-not (Command-Exists pm2)) {
-    Write-Host "📦 Installing PM2 globally..."
+if (-not (Test-Command pm2)) {
+    Write-Host "📦 Installing PM2 globally..." -ForegroundColor Yellow
     npm install -g pm2
 }
 
 # Remove existing posting_server directory if it exists
 if (Test-Path "posting_server") {
-    Write-Host "🗑️  Removing existing posting_server directory..."
+    Write-Host "🗑️  Removing existing posting_server directory..." -ForegroundColor Yellow
     Remove-Item -Recurse -Force "posting_server"
 }
 
 # Create logs directory if it doesn't exist
-New-Item -ItemType Directory -Force -Path "logs"
-
-# Setup posting server
-Write-Host "🔧 Setting up posting server..."
-
-# Clone the repository to a temporary directory (shallow clone for efficiency)
-Write-Host "⬇️ Downloading complete posting server from GitHub..."
-$env:TEMP_DIR = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
-New-Item -ItemType Directory -Path $env:TEMP_DIR
-git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $env:TEMP_DIR
-
-# Copy only the posting_server folder to our target location
-Copy-Item -Recurse "$env:TEMP_DIR\posting_server" -Destination "."
-
-# Clean up temporary directory
-Remove-Item -Recurse -Force $env:TEMP_DIR
-$env:TEMP_DIR = $null
-
-# Navigate to posting_server directory
-Set-Location posting_server
-
-# Install posting server dependencies
-Write-Host "📦 Installing posting server dependencies..."
-npm install
-
-# Set posting server permissions
-Write-Host "🔒 Setting up permissions..."
-icacls "." /grant "Everyone:(OI)(CI)F" /Q
-Get-ChildItem -Filter "*.js" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q }
-Get-ChildItem -Filter "*.json" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q }
-Get-ChildItem -Directory | ForEach-Object { icacls $_.Name /grant "Everyone:(OI)(CI)F" /Q }
-icacls "..\logs" /grant "Everyone:(OI)(CI)F" /Q
-
-# Start the server using PM2 with exponential backoff restart
-Write-Host "🚀 Starting posting server with PM2..."
-pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
-
-# Save PM2 process list
-Write-Host "💾 Saving PM2 process list..."
-pm2 save
-
-# Setup PM2 to start on system boot (Windows approach)
-Write-Host "🔧 Setting up PM2 to start on system boot..."
-try {
-    # Try the standard pm2 startup command first (will fail on Windows but we handle it)
-    $startupOutput = pm2 startup 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "✅ PM2 startup script configured successfully."
-    } else {
-        throw "PM2 startup failed"
-    }
-} catch {
-    Write-Host "⚠️ Standard PM2 startup not supported on Windows. Setting up Task Scheduler..."
-    
-    # Check if running as Administrator
-    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-    
-    if (-not $isAdmin) {
-        Write-Host "⚠️ Administrator privileges required for Task Scheduler setup." -ForegroundColor Yellow
-        Write-Host "📋 Manual setup instructions:" -ForegroundColor Cyan
-        Write-Host "   1. Run PowerShell as Administrator"
-        Write-Host "   2. Re-run this script, or manually create Task Scheduler entry:"
-        Write-Host "      - Open Task Scheduler"
-        Write-Host "      - Create Basic Task: 'PM2 Auto Start'"
-        Write-Host "      - Trigger: 'When the computer starts'"
-        Write-Host "      - Action: 'Start a program'"
-        Write-Host "      - Program: 'pm2'"
-        Write-Host "      - Arguments: 'resurrect'"
-        Write-Host "      - Check 'Run with highest privileges'"
-    } else {
-        try {
-            # Get PM2 executable path
-            $pm2Path = (Get-Command pm2).Source
-            Write-Host "✅ Found PM2 at: $pm2Path"
-            
-            # Get current user
-            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-            
-            # Task details
-            $taskName = "PM2 Auto Start"
-            $taskDescription = "Automatically start PM2 processes on system boot"
-            
-            # Remove existing task if it exists
-            try {
-                $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-                if ($existingTask) {
-                    Write-Host "🗑️ Removing existing PM2 Auto Start task..."
-                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-                }
-            } catch {
-                # Task doesn't exist, continue
-            }
-            
-            # Create the scheduled task
-            $action = New-ScheduledTaskAction -Execute $pm2Path -Argument "resurrect"
-            $trigger = New-ScheduledTaskTrigger -AtStartup
-            $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd
-            
-            $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description $taskDescription
-            Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
-            
-            Write-Host "✅ Successfully created '$taskName' scheduled task!"
-            Write-Host "📋 Task configured to run 'pm2 resurrect' at system startup with highest privileges"
-            
-        } catch {
-            Write-Host "❌ Failed to create scheduled task: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host "📋 Please manually create the task using Task Scheduler:" -ForegroundColor Yellow
-            Write-Host "   - Task Name: PM2 Auto Start"
-            Write-Host "   - Trigger: At startup"
-            Write-Host "   - Action: pm2 resurrect"
-            Write-Host "   - Run with highest privileges"
-        }
-    }
+if (-not (Test-Path "logs")) {
+    New-Item -ItemType Directory -Path "logs" | Out-Null
 }
 
+# Setup posting server
+Write-Host "🔧 Setting up posting server..." -ForegroundColor Yellow
+
+# Clone the repository to a temporary directory
+Write-Host "⬇️ Downloading complete posting server from GitHub..." -ForegroundColor Yellow
+$script:TEMP_DIR = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
+git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $script:TEMP_DIR
+
+# Copy only the posting_server folder to our target location
+Copy-Item -Recurse -Path (Join-Path $script:TEMP_DIR "posting_server") -Destination "."
+
+# Clean up temporary directory
+Remove-Item -Recurse -Force $script:TEMP_DIR
+
+# Navigate to posting_server directory
+Set-Location "posting_server"
+
+# Install posting server dependencies
+Write-Host "📦 Installing posting server dependencies..." -ForegroundColor Yellow
+npm install
+
+# Set posting server permissions (Windows equivalent)
+Write-Host "🔒 Setting up permissions..." -ForegroundColor Yellow
+# In Windows, we mainly need to ensure the logs directory is accessible
+if (-not (Test-Path "../logs")) {
+    New-Item -ItemType Directory -Path "../logs" | Out-Null
+}
+
+# Start the server using PM2 with exponential backoff restart
+Write-Host "🚀 Starting posting server with PM2..." -ForegroundColor Yellow
+pm2 start server.js --name "posting-server" --log ../logs/posting-server.log --exp-backoff-restart-delay=100
+
+# Save PM2 process list
+Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
+pm2 save
+
+# Go back to parent directory for scheduled task creation
+Set-Location ".."
+
+# Setup Task Scheduler for PM2 startup
+Create-PM2StartupTask
+
 # Verify if the server is running
-Write-Host "🔍 Verifying server status..."
-$pm2Status = pm2 list | Select-String "posting-server.*online"
-if ($pm2Status) {
-    Write-Host "✅ Posting server is running!"
+Write-Host "🔍 Verifying server status..." -ForegroundColor Yellow
+$pm2Status = pm2 list | Out-String
+
+if ($pm2Status -match "posting-server.*online") {
+    Write-Host "✅ Posting server is running!" -ForegroundColor Green
 } else {
-    Write-Host "⚠️ Posting server is not running. Attempting to restart..."
+    Write-Host "⚠️ Posting server is not running. Attempting to restart..." -ForegroundColor Yellow
     pm2 restart posting-server
-    $pm2Status = pm2 list | Select-String "posting-server.*online"
-    if ($pm2Status) {
-        Write-Host "✅ Posting server restarted successfully!"
+    Start-Sleep -Seconds 3
+    $pm2Status = pm2 list | Out-String
+    
+    if ($pm2Status -match "posting-server.*online") {
+        Write-Host "✅ Posting server restarted successfully!" -ForegroundColor Green
     } else {
-        Write-Host "❌ Failed to start posting server. Please check logs with 'pm2 logs posting-server'."
+        Write-Host "❌ Failed to start posting server. Please check logs with 'pm2 logs posting-server'." -ForegroundColor Red
         exit 1
     }
 }
 
 # Optional: Install PM2 log rotation module
-Write-Host "🔧 Setting up PM2 log rotation..."
+Write-Host "🔧 Setting up PM2 log rotation..." -ForegroundColor Yellow
 pm2 install pm2-logrotate
 pm2 set pm2-logrotate:max_size 10M
 pm2 set pm2-logrotate:compress true
 
-Write-Host "✅ Server started and configured!"
-Write-Host "📁 Downloaded complete posting server with all folders:"
-Write-Host "   - config/"
-Write-Host "   - models/"
-Write-Host "   - utils/"
-Write-Host "   - server.js"
-Write-Host "   - package.json"
-Write-Host ""
-Write-Host "To manage the server, use these PM2 commands:"
-Write-Host "  - pm2 status              # Check server status"
-Write-Host "  - pm2 logs                # View all logs"
-Write-Host "  - pm2 logs posting-server # View posting server logs"
-Write-Host "  - pm2 stop all           # Stop the server"
-Write-Host "  - pm2 restart all        # Restart the server"
-Write-Host "  - pm2 delete posting-server # Remove the server from PM2"
-Write-Host "  - pm2 save               # Save current process list"
-Write-Host "  - pm2 resurrect          # Restore saved processes"
+Write-Host "" -ForegroundColor Green
+Write-Host "✅ Server started and configured to run on system boot!" -ForegroundColor Green
+Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
+Write-Host "   - config/" -ForegroundColor Cyan
+Write-Host "   - models/" -ForegroundColor Cyan
+Write-Host "   - utils/" -ForegroundColor Cyan
+Write-Host "   - server.js" -ForegroundColor Cyan
+Write-Host "   - package.json" -ForegroundColor Cyan
+Write-Host "" -ForegroundColor Green
+Write-Host "📋 Scheduled Task Information:" -ForegroundColor Cyan
+Write-Host "   - Task Name: PM2-AutoStart" -ForegroundColor Cyan
+Write-Host "   - Delay: 1 minute after system startup" -ForegroundColor Cyan
+Write-Host "   - Batch file: pm2-startup.bat" -ForegroundColor Cyan
+Write-Host "" -ForegroundColor Green
+Write-Host "🛠️ To manage the server, use these PM2 commands:" -ForegroundColor Yellow
+Write-Host "   pm2 status                # Check server status" -ForegroundColor White
+Write-Host "   pm2 logs                  # View all logs" -ForegroundColor White
+Write-Host "   pm2 logs posting-server   # View posting server logs" -ForegroundColor White
+Write-Host "   pm2 stop all             # Stop the server" -ForegroundColor White
+Write-Host "   pm2 restart all          # Restart the server" -ForegroundColor White
+Write-Host "   pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
+Write-Host "" -ForegroundColor Green
+Write-Host "🔧 To manage the scheduled task:" -ForegroundColor Yellow
+Write-Host "   Get-ScheduledTask -TaskName 'PM2-AutoStart'  # Check task status" -ForegroundColor White
+Write-Host "   Start-ScheduledTask -TaskName 'PM2-AutoStart'  # Manually run task" -ForegroundColor White
+Write-Host "   Unregister-ScheduledTask -TaskName 'PM2-AutoStart'  # Remove task" -ForegroundColor White
+
+Write-Host "" -ForegroundColor Green
+Write-Host "🎉 Setup completed successfully!" -ForegroundColor Green
