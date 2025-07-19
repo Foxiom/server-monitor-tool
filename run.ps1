@@ -336,26 +336,7 @@ if %errorlevel% neq 0 (
         call :log_message "PM2 configuration saved"
     ) else (
         call :log_message "ERROR: Failed to start posting server"
-        REM Try alternative startup method
-        call :log_message "Attempting alternative startup method..."
-        pm2 start server.js --name "posting-server-backup" >nul 2>&1
-        pm2 save >nul 2>&1
     )
-    
-    REM Verify it started with multiple attempts
-    set /a attempt=0
-    :verify_loop
-    set /a attempt+=1
-    timeout /t 5 /nobreak >nul
-    pm2 list --no-colors > "%TEMP%\pm2verify.txt" 2>&1
-    findstr "posting-server.*online" "%TEMP%\pm2verify.txt" >nul
-    if %errorlevel% equ 0 (
-        call :log_message "Posting server verified online after %attempt% attempts"
-        goto :verified
-    )
-    if %attempt% lss 3 goto :verify_loop
-    call :log_message "WARNING: Posting server failed to start after 3 attempts"
-    :verified
 ) else (
     call :log_message "Posting server already running after resurrection"
 )
@@ -680,8 +661,80 @@ pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" -
 Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
 pm2 save
 
-# Setup Windows Service for PM2 auto-startup
-Write-Host "🔧 Setting up Windows Service for PM2 auto-startup..." -ForegroundColor Yellow
+# Function to setup PM2 Windows Service using pm2-windows-service
+function Setup-PM2WindowsService {
+    Write-Host "🔧 Setting up PM2 Windows Service for auto-start..." -ForegroundColor Yellow
+    
+    try {
+        # Check if pm2-windows-service is already installed globally
+        Write-Host "📦 Installing pm2-windows-service globally..." -ForegroundColor Yellow
+        $npmCheck = npm list -g pm2-windows-service 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            npm install -g pm2-windows-service
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to install pm2-windows-service"
+            }
+            Write-Host "✅ pm2-windows-service installed successfully" -ForegroundColor Green
+        } else {
+            Write-Host "✅ pm2-windows-service already installed" -ForegroundColor Green
+        }
+        
+        # Remove existing PM2 service if it exists
+        Write-Host "🗑️ Removing any existing PM2 service..." -ForegroundColor Yellow
+        try {
+            $existingService = Get-Service -Name "PM2" -ErrorAction SilentlyContinue
+            if ($existingService) {
+                if ($existingService.Status -eq "Running") {
+                    Stop-Service -Name "PM2" -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 5
+                }
+                # Try pm2-service-uninstall first, then fallback to sc.exe
+                try {
+                    pm2-service-uninstall 2>$null
+                } catch {
+                    & sc.exe delete "PM2" 2>$null
+                }
+                Start-Sleep -Seconds 3
+                Write-Host "✅ Existing PM2 service removed" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "⚠️ Warning during service cleanup: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        
+        # Install PM2 as a Windows service
+        Write-Host "🔧 Installing PM2 as Windows service..." -ForegroundColor Yellow
+        $installOutput = pm2-service-install 2>&1
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ PM2 Windows service installed successfully!" -ForegroundColor Green
+            
+            # Start the PM2 service
+            Write-Host "🚀 Starting PM2 Windows service..." -ForegroundColor Yellow
+            Start-Service -Name "PM2" -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 10
+            
+            # Verify service is running
+            $service = Get-Service -Name "PM2" -ErrorAction SilentlyContinue
+            if ($service -and $service.Status -eq "Running") {
+                Write-Host "✅ PM2 service started successfully!" -ForegroundColor Green
+                return $true
+            } else {
+                Write-Host "⚠️ PM2 service installed but not running. Status: $($service.Status)" -ForegroundColor Yellow
+                Write-Host "💡 Try starting manually: Start-Service -Name PM2" -ForegroundColor Cyan
+                return $true  # Service is installed, just not running
+            }
+        } else {
+            Write-Host "❌ Failed to install PM2 service: $installOutput" -ForegroundColor Red
+            return $false
+        }
+    }
+    catch {
+        Write-Host "❌ Error setting up PM2 Windows Service: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "💡 Make sure you're running as Administrator and Node.js/npm are properly installed" -ForegroundColor Cyan
+        return $false
+    }
+}
+
 $serviceSetupSuccess = Setup-PM2WindowsService
 
 if ($serviceSetupSuccess) {
@@ -733,12 +786,12 @@ Write-Host "   - utils/" -ForegroundColor White
 Write-Host "   - server.js" -ForegroundColor White
 Write-Host "   - package.json" -ForegroundColor White
 Write-Host ""
-Write-Host "🔧 Windows Service Information:" -ForegroundColor Yellow
-Write-Host "   - PM2 processes will auto-start on system boot via Windows Service" -ForegroundColor White
-Write-Host "   - Service name: 'PM2PostingServer'" -ForegroundColor White
-Write-Host "   - Service runs as: LocalSystem (with elevated privileges)" -ForegroundColor White
+Write-Host "🔧 PM2 Windows Service Information:" -ForegroundColor Yellow
+Write-Host "   - PM2 processes will auto-start on system boot via pm2-windows-service" -ForegroundColor White
+Write-Host "   - Service name: 'PM2' (default PM2 service)" -ForegroundColor White
+Write-Host "   - Service runs with system privileges for reliable auto-start" -ForegroundColor White
 Write-Host "   - You can view/manage the service in Windows Services (services.msc)" -ForegroundColor White
-Write-Host "   - Service log: logs\pm2-service.log" -ForegroundColor White
+Write-Host "   - PM2 logs: Use 'pm2 logs' command to view application logs" -ForegroundColor White
 Write-Host ""
 Write-Host "To manage the PM2 server, use these commands:" -ForegroundColor Yellow
 Write-Host "  - pm2 status              # Check server status" -ForegroundColor White
@@ -748,15 +801,17 @@ Write-Host "  - pm2 stop all           # Stop the server" -ForegroundColor White
 Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor White
 Write-Host "  - pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
 Write-Host ""
-Write-Host "To manage the Windows Service:" -ForegroundColor Yellow
-Write-Host "  - Get-Service -Name PM2PostingServer    # Check service status" -ForegroundColor White
-Write-Host "  - Start-Service -Name PM2PostingServer  # Start the service" -ForegroundColor White
-Write-Host "  - Stop-Service -Name PM2PostingServer   # Stop the service" -ForegroundColor White
-Write-Host "  - Restart-Service -Name PM2PostingServer # Restart the service" -ForegroundColor White
-Write-Host "  - services.msc                          # Open Windows Services GUI" -ForegroundColor White
+Write-Host "To manage the PM2 Windows Service:" -ForegroundColor Yellow
+Write-Host "  - Get-Service -Name PM2              # Check PM2 service status" -ForegroundColor White
+Write-Host "  - Start-Service -Name PM2            # Start the PM2 service" -ForegroundColor White
+Write-Host "  - Stop-Service -Name PM2             # Stop the PM2 service" -ForegroundColor White
+Write-Host "  - Restart-Service -Name PM2          # Restart the PM2 service" -ForegroundColor White
+Write-Host "  - pm2-service-uninstall              # Uninstall PM2 service (if needed)" -ForegroundColor White
+Write-Host "  - services.msc                       # Open Windows Services GUI" -ForegroundColor White
 Write-Host ""
-Write-Host "To test auto-startup:" -ForegroundColor Cyan
-Write-Host "  1. Restart your computer" -ForegroundColor White
-Write-Host "  2. Check with 'Get-Service -Name PM2PostingServer'" -ForegroundColor White
-Write-Host "  3. Check with 'pm2 status' after boot" -ForegroundColor White
-Write-Host "  4. Check service log at 'logs\pm2-service.log'" -ForegroundColor White
+Write-Host "To test auto-startup after reboot/power loss:" -ForegroundColor Cyan
+Write-Host "  1. Restart your computer or simulate power loss" -ForegroundColor White
+Write-Host "  2. Wait for system to fully boot" -ForegroundColor White
+Write-Host "  3. Check PM2 service: 'Get-Service -Name PM2'" -ForegroundColor White
+Write-Host "  4. Check posting server: 'pm2 status'" -ForegroundColor White
+Write-Host "  5. Verify server monitoring is working" -ForegroundColor White
