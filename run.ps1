@@ -1,4 +1,4 @@
-# PowerShell Script for Setting up Posting Server
+# PowerShell Script for Setting up Posting Server with Windows Service
 # Exit on error
 $ErrorActionPreference = "Stop"
 
@@ -17,11 +17,29 @@ function Cleanup {
     exit 1
 }
 
-# Enhanced cleanup function that handles running processes
+# Enhanced cleanup function that handles running processes and services
 function Enhanced-Cleanup {
     Write-Host "🔄 Performing enhanced cleanup..." -ForegroundColor Yellow
     
-    # Stop PM2 processes first
+    # Stop and remove Windows service first
+    try {
+        Write-Host "🛑 Stopping existing PM2PostingServer service..." -ForegroundColor Yellow
+        $service = Get-Service -Name "PM2PostingServer" -ErrorAction SilentlyContinue
+        if ($service) {
+            if ($service.Status -eq "Running") {
+                Stop-Service -Name "PM2PostingServer" -Force
+                Start-Sleep -Seconds 5
+            }
+            # Remove the service using sc.exe
+            & sc.exe delete "PM2PostingServer" 2>$null
+            Start-Sleep -Seconds 3
+        }
+    }
+    catch {
+        Write-Host "⚠️ Service cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    
+    # Stop PM2 processes
     try {
         Write-Host "🛑 Stopping existing PM2 processes..." -ForegroundColor Yellow
         pm2 stop posting-server 2>$null
@@ -130,24 +148,36 @@ function Install-Git {
     $env:Path = "$machinePath;$userPath"
 }
 
-# Function to setup PM2 Windows startup using Task Scheduler - FIXED VERSION
-function Setup-PM2WindowsStartup {
-    Write-Host "🔧 Setting up PM2 Windows startup with proper user context..." -ForegroundColor Yellow
+# Function to create and install Windows Service for PM2 Posting Server
+function Setup-PM2WindowsService {
+    Write-Host "🔧 Setting up PM2 Posting Server Windows Service..." -ForegroundColor Yellow
     
     try {
-        # Get current user info
+        # Check if running as administrator
+        $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+        $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        
+        if (-not $isAdmin) {
+            Write-Host "⚠️ Warning: Not running as Administrator. Service installation may fail." -ForegroundColor Yellow
+            Write-Host "💡 For best results, run PowerShell as Administrator." -ForegroundColor Cyan
+        }
+        
+        # Get current user info and paths
         $CurrentUser = $env:USERNAME
         $CurrentDomain = $env:USERDOMAIN
         $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
-        $LogPath = Join-Path $env:USERPROFILE "logs\pm2-startup.log"
+        $LogPath = Join-Path $env:USERPROFILE "logs\pm2-service.log"
         $PM2Home = Join-Path $env:USERPROFILE ".pm2"
+        $ServiceName = "PM2PostingServer"
+        $ServiceDisplayName = "PM2 Posting Server"
+        $ServiceDescription = "PM2 Posting Server - Auto-starts posting server application on system boot"
         
         # Ensure PM2_HOME directory exists
         if (!(Test-Path $PM2Home)) {
             New-Item -ItemType Directory -Path $PM2Home -Force | Out-Null
         }
         
-        # Set PM2_HOME environment variable persistently for the machine and current user
+        # Set PM2_HOME environment variable persistently
         [System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::Machine)
         [System.Environment]::SetEnvironmentVariable("PM2_HOME", $PM2Home, [System.EnvironmentVariableTarget]::User)
         $env:PM2_HOME = $PM2Home
@@ -158,192 +188,205 @@ function Setup-PM2WindowsStartup {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
         
-        # Create improved startup script with explicit PM2 home and environment
-        $StartupScript = @"
-# PM2 Startup Script for Posting Server - Fixed Version
+        # Create service wrapper script
+        $ServiceScript = @"
+# PM2 Posting Server Service Wrapper Script
 # Set PM2 home directory explicitly
 `$env:PM2_HOME = "$PM2Home"
 
-# Log startup attempt
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ==================================="
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 Startup Script Started"
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Current User: \`$env:USERNAME"
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 Home: \`$env:PM2_HOME"
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] System uptime: \`$(Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty LastBootUpTime)"
+# Set up logging function
+function Write-ServiceLog {
+    param([string]`$Message)
+    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$Message"
+}
+
+# Log service startup
+Write-ServiceLog "==================================="
+Write-ServiceLog "PM2 Posting Server Service Started"
+Write-ServiceLog "Current User: \`$env:USERNAME"
+Write-ServiceLog "PM2 Home: \`$env:PM2_HOME"
+Write-ServiceLog "Working Directory: $PostingServerPath"
+
+# Change to posting server directory
+try {
+    Set-Location "$PostingServerPath"
+    Write-ServiceLog "Changed to directory: \`$(Get-Location)"
+}
+catch {
+    Write-ServiceLog "ERROR: Failed to change directory: \`$_"
+    exit 1
+}
+
+# Ensure environment path is loaded
+`$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
 # Wait for system to stabilize
 Start-Sleep -Seconds 30
+Write-ServiceLog "System stabilization wait completed"
 
-# Change to posting server directory
-Set-Location "$PostingServerPath"
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Changed to directory: \`$(Get-Location)"
-
-# Check if Node.js and PM2 are available
-if (!(Test-Path (Join-Path `$env:PM2_HOME "node_modules"))) {
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 or Node.js not found, attempting to reload environment..."
-    `$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+# Check if PM2 is available
+try {
+    `$pm2Version = pm2 -v 2>&1
+    Write-ServiceLog "PM2 version: `$pm2Version"
+}
+catch {
+    Write-ServiceLog "ERROR: PM2 not found: \`$_"
+    exit 1
 }
 
-# Check if PM2 dump file exists
+# Check if PM2 dump file exists and try to resurrect
 `$dumpFile = Join-Path "$PM2Home" "dump.pm2"
 if (Test-Path `$dumpFile) {
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 dump file found: `$dumpFile"
-} else {
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 dump file NOT found: `$dumpFile"
+    Write-ServiceLog "PM2 dump file found, attempting resurrect..."
+    try {
+        `$resurrectOutput = pm2 resurrect 2>&1
+        Write-ServiceLog "PM2 resurrect output: `$resurrectOutput"
+        Start-Sleep -Seconds 10
+    }
+    catch {
+        Write-ServiceLog "PM2 resurrect failed: \`$_"
+    }
+}
+else {
+    Write-ServiceLog "No PM2 dump file found"
 }
 
-# Start PM2 resurrect
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Starting PM2 resurrect..."
-try {
-    `$resurrectOutput = pm2 resurrect 2>&1
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 resurrect output: `$resurrectOutput"
-} catch {
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 resurrect failed: `$_"
-}
+# Check if posting-server is running
+`$pm2List = pm2 list --no-colors 2>&1
+Write-ServiceLog "PM2 list output: `$pm2List"
 
-# Wait for processes to start
-Start-Sleep -Seconds 10
-
-# Check PM2 status
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 status after resurrect:"
-try {
-    `$pm2List = pm2 list 2>&1
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$pm2List"
-} catch {
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 list failed: `$_"
-}
-
-# If no processes found, try to start the server manually
-if (`$pm2List -match "0 processes") {
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] No processes found, starting server manually..."
+if (`$pm2List -notmatch "posting-server.*online") {
+    Write-ServiceLog "Posting server not running, starting manually..."
     try {
         pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
         pm2 save
-        Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Server started manually and saved"
-    } catch {
-        Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Manual server start failed: `$_"
+        Write-ServiceLog "Posting server started and saved"
+        
+        # Verify it started
+        `$verifyList = pm2 list --no-colors 2>&1
+        Write-ServiceLog "Verification - PM2 list: `$verifyList"
+    }
+    catch {
+        Write-ServiceLog "ERROR: Failed to start posting server: \`$_"
+        exit 1
     }
 }
+else {
+    Write-ServiceLog "Posting server already running"
+}
 
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] PM2 startup script completed"
-Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ==================================="
-"@
+Write-ServiceLog "PM2 Posting Server Service initialization completed successfully"
+Write-ServiceLog "==================================="
+
+# Keep the service running - monitor PM2 processes
+while (`$true) {
+    try {
+        Start-Sleep -Seconds 60
+        `$status = pm2 list --no-colors 2>&1
         
-        # Save the startup script
-        $ScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_startup.ps1"
-        $StartupScript | Out-File -FilePath $ScriptPath -Encoding UTF8
-        
-        # Create scheduled task to run as current user
-        $TaskName = "PM2 Posting Server Startup"
-        $TaskDescription = "Start PM2 posting server on system boot"
-        
-        # Delete existing task if it exists
-        try {
-            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-        }
-        catch {
-            # Task doesn't exist, continue
-        }
-        
-        # Create task using PowerShell's scheduled task cmdlets for better reliability
-        Write-Host "🔧 Creating scheduled task..." -ForegroundColor Yellow
-        
-        # First try using PowerShell's native scheduled task cmdlets
-        try {
-            # Clean up existing task if it exists
-            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-            
-            # Create the action to run the PowerShell script
-            $Action = New-ScheduledTaskAction -Execute "powershell.exe" `
-                      -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`"" `
-                      -WorkingDirectory $env:USERPROFILE
-            
-            # Create a trigger that starts at system startup and delays for 2 minutes to ensure system is ready
-            $Trigger = New-ScheduledTaskTrigger -AtStartup
-            $Trigger.Delay = "PT2M"  # 2 minute delay after startup
-            
-            # Task settings - allow task to run on batteries, don't stop on battery operation
-            # and allow running if network is available
-            $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-                         -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 0) `
-                         -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
-                         -RunOnlyIfNetworkAvailable:$false
-            
-            # Run with highest privileges
-            $Principal = New-ScheduledTaskPrincipal -UserId "$CurrentDomain\$CurrentUser" `
-                         -LogonType Interactive `
-                         -RunLevel Highest
-            
-            # Register the task
-            Register-ScheduledTask -TaskName $TaskName `
-                                  -Description $TaskDescription `
-                                  -Action $Action `
-                                  -Trigger $Trigger `
-                                  -Settings $Settings `
-                                  -Principal $Principal `
-                                  -Force | Out-Null
-                                  
-            Write-Host "✅ Task created using PowerShell scheduled task cmdlets" -ForegroundColor Green
-            
-            # Verify the task was created
-            $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-            Write-Host "✅ Task verified: $($task.State)" -ForegroundColor Green
-            
-            # Show task details
-            Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
-            Write-Host "📋 Running as: $CurrentDomain\$CurrentUser" -ForegroundColor Cyan
-            Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
-            Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
-            
-            return $true
-        }
-        catch {
-            Write-Host "⚠️ PowerShell task creation failed: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host "🔄 Falling back to schtasks.exe..." -ForegroundColor Yellow
-            
-            # Fall back to schtasks.exe if PowerShell cmdlets fail
-            $schtasksArgs = @(
-                "/create",
-                "/tn", "$TaskName",
-                "/tr", "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`"",
-                "/sc", "onstart",
-                "/ru", "$CurrentDomain\$CurrentUser",
-                "/rl", "highest",
-                "/delay", "0002:00",  # 2 minute delay
-                "/it",   # Run only when user is logged on interactively
-                "/f"
-            )
-            
-            Write-Host "Command: schtasks $($schtasksArgs -join ' ')" -ForegroundColor Gray
-            
-            # Execute the schtasks command with proper argument passing
-            $result = & schtasks.exe $schtasksArgs 2>&1
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Task created using schtasks.exe" -ForegroundColor Green
-                
-                # Verify the task was created
-                $verifyResult = schtasks /query /tn "$TaskName" 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "✅ Task verified successfully!" -ForegroundColor Green
-                }
-                
-                # Show task details
-                Write-Host "📋 Task name: $TaskName" -ForegroundColor Cyan
-                Write-Host "📋 Running as: $CurrentDomain\$CurrentUser" -ForegroundColor Cyan
-                Write-Host "📋 Script location: $ScriptPath" -ForegroundColor Cyan
-                Write-Host "📋 Startup log: $LogPath" -ForegroundColor Cyan
-                
-                return $true
-            }
-            else {
-                Write-Host "⚠️ schtasks fallback failed: $result" -ForegroundColor Red
-                return $false
-            }
+        # Check if posting-server process is still running
+        if (`$status -notmatch "posting-server.*online") {
+            Write-ServiceLog "WARNING: Posting server not online, attempting restart..."
+            pm2 restart posting-server 2>&1
+            pm2 save
         }
     }
     catch {
-        Write-Host "⚠️ Failed to setup Windows Task Scheduler: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-ServiceLog "ERROR in monitoring loop: \`$_"
+        Start-Sleep -Seconds 60
+    }
+}
+"@
+        
+        # Save the service script
+        $ServiceScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_service.ps1"
+        $ServiceScript | Out-File -FilePath $ServiceScriptPath -Encoding UTF8
+        
+        Write-Host "📝 Service script created at: $ServiceScriptPath" -ForegroundColor Cyan
+        
+        # Remove existing service if it exists
+        try {
+            $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+            if ($existingService) {
+                Write-Host "🗑️ Removing existing service..." -ForegroundColor Yellow
+                if ($existingService.Status -eq "Running") {
+                    Stop-Service -Name $ServiceName -Force
+                    Start-Sleep -Seconds 5
+                }
+                & sc.exe delete $ServiceName | Out-Null
+                Start-Sleep -Seconds 3
+            }
+        }
+        catch {
+            Write-Host "⚠️ Warning during existing service cleanup: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        
+        # Create the Windows service using sc.exe
+        Write-Host "🔧 Creating Windows service..." -ForegroundColor Yellow
+        
+        # Build the service command
+        $ServiceCommand = "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ServiceScriptPath`""
+        
+        # Create service
+        $createResult = & sc.exe create $ServiceName binPath= $ServiceCommand DisplayName= $ServiceDisplayName start= auto
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ Failed to create service: $createResult" -ForegroundColor Red
+            return $false
+        }
+        
+        # Set service description
+        & sc.exe description $ServiceName $ServiceDescription | Out-Null
+        
+        # Configure service recovery options
+        & sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
+        
+        # Set service to run as Local System (for broader permissions)
+        # Note: You can change this to run as a specific user if needed
+        & sc.exe config $ServiceName obj= "LocalSystem" | Out-Null
+        
+        Write-Host "✅ Windows service created successfully!" -ForegroundColor Green
+        
+        # Start the service
+        Write-Host "🚀 Starting PM2 Posting Server service..." -ForegroundColor Yellow
+        try {
+            Start-Service -Name $ServiceName
+            Start-Sleep -Seconds 5
+            
+            # Verify service is running
+            $service = Get-Service -Name $ServiceName
+            if ($service.Status -eq "Running") {
+                Write-Host "✅ Service started successfully!" -ForegroundColor Green
+            } else {
+                Write-Host "⚠️ Service created but not running. Status: $($service.Status)" -ForegroundColor Yellow
+            }
+        }
+        catch {
+            Write-Host "⚠️ Service created but failed to start: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "💡 You can start it manually using: Start-Service -Name $ServiceName" -ForegroundColor Cyan
+        }
+        
+        # Display service information
+        Write-Host ""
+        Write-Host "📋 Service Details:" -ForegroundColor Cyan
+        Write-Host "   Service Name: $ServiceName" -ForegroundColor White
+        Write-Host "   Display Name: $ServiceDisplayName" -ForegroundColor White
+        Write-Host "   Startup Type: Automatic" -ForegroundColor White
+        Write-Host "   Service Script: $ServiceScriptPath" -ForegroundColor White
+        Write-Host "   Service Log: $LogPath" -ForegroundColor White
+        Write-Host ""
+        Write-Host "🔧 Service Management Commands:" -ForegroundColor Yellow
+        Write-Host "   Start-Service -Name $ServiceName        # Start the service" -ForegroundColor White
+        Write-Host "   Stop-Service -Name $ServiceName         # Stop the service" -ForegroundColor White
+        Write-Host "   Restart-Service -Name $ServiceName      # Restart the service" -ForegroundColor White
+        Write-Host "   Get-Service -Name $ServiceName          # Check service status" -ForegroundColor White
+        Write-Host "   sc.exe delete $ServiceName              # Remove the service (as Administrator)" -ForegroundColor White
+        
+        return $true
+    }
+    catch {
+        Write-Host "❌ Failed to setup Windows service: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "💡 Make sure you're running PowerShell as Administrator" -ForegroundColor Cyan
         return $false
     }
 }
@@ -431,32 +474,15 @@ pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" -
 Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
 pm2 save
 
-# Setup PM2 to start on system boot - Windows compatible version
-Write-Host "🔧 Setting up PM2 to start on system boot..." -ForegroundColor Yellow
-try {
-    $startupOutput = pm2 startup 2>&1
-    if ($startupOutput -match "Init system not found" -or $startupOutput -match "error") {
-        Write-Host "⚠️ Standard PM2 startup not supported on Windows. Using Windows Task Scheduler instead..." -ForegroundColor Yellow
-        
-        # Use our Windows-specific startup method
-        $setupSuccess = Setup-PM2WindowsStartup
-        
-        if ($setupSuccess) {
-            Write-Host "✅ PM2 startup configured successfully using Windows Task Scheduler!" -ForegroundColor Green
-        } else {
-            Write-Host "⚠️ Warning: PM2 startup setup failed. Server will need to be started manually after reboot." -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "✅ PM2 startup configured successfully!" -ForegroundColor Green
-    }
-}
-catch {
-    Write-Host "⚠️ PM2 startup failed. Setting up Windows Task Scheduler instead..." -ForegroundColor Yellow
-    $setupSuccess = Setup-PM2WindowsStartup
-    
-    if (!$setupSuccess) {
-        Write-Host "⚠️ Warning: PM2 startup setup failed. Server will need to be started manually after reboot." -ForegroundColor Yellow
-    }
+# Setup Windows Service for PM2 auto-startup
+Write-Host "🔧 Setting up Windows Service for PM2 auto-startup..." -ForegroundColor Yellow
+$serviceSetupSuccess = Setup-PM2WindowsService
+
+if ($serviceSetupSuccess) {
+    Write-Host "✅ Windows Service configured successfully!" -ForegroundColor Green
+} else {
+    Write-Host "⚠️ Warning: Windows Service setup failed. Server will need to be started manually after reboot." -ForegroundColor Yellow
+    Write-Host "💡 Try running this script as Administrator for service installation." -ForegroundColor Cyan
 }
 
 # Verify if the server is running
@@ -492,6 +518,7 @@ if ($currentConfig -notmatch "max_size.*10M") {
     Write-Host "✅ PM2 log rotation settings already configured." -ForegroundColor Green
 }
 
+Write-Host ""
 Write-Host "✅ Server started and configured to run on system boot!" -ForegroundColor Green
 Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
 Write-Host "   - config/" -ForegroundColor White
@@ -500,14 +527,14 @@ Write-Host "   - utils/" -ForegroundColor White
 Write-Host "   - server.js" -ForegroundColor White
 Write-Host "   - package.json" -ForegroundColor White
 Write-Host ""
-Write-Host "🔧 Windows Startup Information:" -ForegroundColor Yellow
-Write-Host "   - PM2 processes will auto-start on system boot via Windows Task Scheduler" -ForegroundColor White
-Write-Host "   - Task name: 'PM2 Posting Server Startup'" -ForegroundColor White
-Write-Host "   - Task runs as: $env:USERDOMAIN\$env:USERNAME (your user account)" -ForegroundColor White
-Write-Host "   - You can view/manage the task in Windows Task Scheduler" -ForegroundColor White
-Write-Host "   - Startup log: logs\pm2-startup.log" -ForegroundColor White
+Write-Host "🔧 Windows Service Information:" -ForegroundColor Yellow
+Write-Host "   - PM2 processes will auto-start on system boot via Windows Service" -ForegroundColor White
+Write-Host "   - Service name: 'PM2PostingServer'" -ForegroundColor White
+Write-Host "   - Service runs as: LocalSystem (with elevated privileges)" -ForegroundColor White
+Write-Host "   - You can view/manage the service in Windows Services (services.msc)" -ForegroundColor White
+Write-Host "   - Service log: logs\pm2-service.log" -ForegroundColor White
 Write-Host ""
-Write-Host "To manage the server, use these PM2 commands:" -ForegroundColor Yellow
+Write-Host "To manage the PM2 server, use these commands:" -ForegroundColor Yellow
 Write-Host "  - pm2 status              # Check server status" -ForegroundColor White
 Write-Host "  - pm2 logs                # View all logs" -ForegroundColor White
 Write-Host "  - pm2 logs posting-server # View posting server logs" -ForegroundColor White
@@ -515,7 +542,15 @@ Write-Host "  - pm2 stop all           # Stop the server" -ForegroundColor White
 Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor White
 Write-Host "  - pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
 Write-Host ""
+Write-Host "To manage the Windows Service:" -ForegroundColor Yellow
+Write-Host "  - Get-Service -Name PM2PostingServer    # Check service status" -ForegroundColor White
+Write-Host "  - Start-Service -Name PM2PostingServer  # Start the service" -ForegroundColor White
+Write-Host "  - Stop-Service -Name PM2PostingServer   # Stop the service" -ForegroundColor White
+Write-Host "  - Restart-Service -Name PM2PostingServer # Restart the service" -ForegroundColor White
+Write-Host "  - services.msc                          # Open Windows Services GUI" -ForegroundColor White
+Write-Host ""
 Write-Host "To test auto-startup:" -ForegroundColor Cyan
 Write-Host "  1. Restart your computer" -ForegroundColor White
-Write-Host "  2. Check with 'pm2 status' after boot" -ForegroundColor White
-Write-Host "  3. Check startup log at 'logs\pm2-startup.log'" -ForegroundColor White
+Write-Host "  2. Check with 'Get-Service -Name PM2PostingServer'" -ForegroundColor White
+Write-Host "  3. Check with 'pm2 status' after boot" -ForegroundColor White
+Write-Host "  4. Check service log at 'logs\pm2-service.log'" -ForegroundColor White
