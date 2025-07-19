@@ -210,10 +210,12 @@ try {
     
     # Verify if the server is running
     Write-Host "🔍 Verifying server status..." -ForegroundColor Yellow
-    $pm2Status = pm2 jlist | ConvertFrom-Json
-    $postingServer = $pm2Status | Where-Object { $_.name -eq "posting-server" }
     
-    if ($postingServer -and $postingServer.pm2_env.status -eq "online") {
+    # Use pm2 list instead of jlist to avoid JSON parsing issues
+    $pm2ListOutput = pm2 list
+    $isRunning = $pm2ListOutput | Select-String "posting-server.*online"
+    
+    if ($isRunning) {
         Write-Host "✅ Posting server is running!" -ForegroundColor Green
     }
     else {
@@ -221,10 +223,11 @@ try {
         pm2 restart posting-server
         Start-Sleep -Seconds 3
         
-        $pm2StatusRetry = pm2 jlist | ConvertFrom-Json
-        $postingServerRetry = $pm2StatusRetry | Where-Object { $_.name -eq "posting-server" }
+        # Check again after restart
+        $pm2ListOutputRetry = pm2 list
+        $isRunningRetry = $pm2ListOutputRetry | Select-String "posting-server.*online"
         
-        if ($postingServerRetry -and $postingServerRetry.pm2_env.status -eq "online") {
+        if ($isRunningRetry) {
             Write-Host "✅ Posting server restarted successfully!" -ForegroundColor Green
         }
         else {
