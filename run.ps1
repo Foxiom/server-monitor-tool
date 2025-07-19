@@ -666,17 +666,17 @@ function Setup-PM2WindowsService {
     Write-Host "🔧 Setting up PM2 Windows Service for auto-start..." -ForegroundColor Yellow
     
     try {
-        # Check if pm2-windows-service is already installed globally
-        Write-Host "📦 Installing pm2-windows-service globally..." -ForegroundColor Yellow
-        $npmCheck = npm list -g pm2-windows-service 2>$null
+        # Check if pm2-installer is already installed globally
+        Write-Host "📦 Installing pm2-installer globally..." -ForegroundColor Yellow
+        $npmCheck = npm list -g pm2-installer 2>$null
         if ($LASTEXITCODE -ne 0) {
-            npm install -g pm2-windows-service
+            npm install -g pm2-installer
             if ($LASTEXITCODE -ne 0) {
-                throw "Failed to install pm2-windows-service"
+                throw "Failed to install pm2-installer"
             }
-            Write-Host "✅ pm2-windows-service installed successfully" -ForegroundColor Green
+            Write-Host "✅ pm2-installer installed successfully" -ForegroundColor Green
         } else {
-            Write-Host "✅ pm2-windows-service already installed" -ForegroundColor Green
+            Write-Host "✅ pm2-installer already installed" -ForegroundColor Green
         }
         
         # Remove existing PM2 service if it exists
@@ -688,9 +688,9 @@ function Setup-PM2WindowsService {
                     Stop-Service -Name "PM2" -Force -ErrorAction SilentlyContinue
                     Start-Sleep -Seconds 5
                 }
-                # Try pm2-service-uninstall first, then fallback to sc.exe
+                # Try pm2-installer uninstall first, then fallback to sc.exe
                 try {
-                    pm2-service-uninstall 2>$null
+                    pm2-installer uninstall 2>$null
                 } catch {
                     & sc.exe delete "PM2" 2>$null
                 }
@@ -703,7 +703,7 @@ function Setup-PM2WindowsService {
         
         # Install PM2 as a Windows service
         Write-Host "🔧 Installing PM2 as Windows service..." -ForegroundColor Yellow
-        $installOutput = pm2-service-install 2>&1
+        $installOutput = pm2-installer install 2>&1
         
         if ($LASTEXITCODE -eq 0) {
             Write-Host "✅ PM2 Windows service installed successfully!" -ForegroundColor Green
@@ -787,7 +787,7 @@ Write-Host "   - server.js" -ForegroundColor White
 Write-Host "   - package.json" -ForegroundColor White
 Write-Host ""
 Write-Host "🔧 PM2 Windows Service Information:" -ForegroundColor Yellow
-Write-Host "   - PM2 processes will auto-start on system boot via pm2-windows-service" -ForegroundColor White
+Write-Host "   - PM2 processes will auto-start on system boot via pm2-installer" -ForegroundColor White
 Write-Host "   - Service name: 'PM2' (default PM2 service)" -ForegroundColor White
 Write-Host "   - Service runs with system privileges for reliable auto-start" -ForegroundColor White
 Write-Host "   - You can view/manage the service in Windows Services (services.msc)" -ForegroundColor White
@@ -806,7 +806,7 @@ Write-Host "  - Get-Service -Name PM2              # Check PM2 service status" -
 Write-Host "  - Start-Service -Name PM2            # Start the PM2 service" -ForegroundColor White
 Write-Host "  - Stop-Service -Name PM2             # Stop the PM2 service" -ForegroundColor White
 Write-Host "  - Restart-Service -Name PM2          # Restart the PM2 service" -ForegroundColor White
-Write-Host "  - pm2-service-uninstall              # Uninstall PM2 service (if needed)" -ForegroundColor White
+Write-Host "  - pm2-installer uninstall           # Uninstall PM2 service (if needed)" -ForegroundColor White
 Write-Host "  - services.msc                       # Open Windows Services GUI" -ForegroundColor White
 Write-Host ""
 Write-Host "To test auto-startup after reboot/power loss:" -ForegroundColor Cyan
