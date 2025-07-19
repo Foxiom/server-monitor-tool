@@ -137,6 +137,21 @@ cd /d "$currentDir"
     }
 }
 
+# Function to check PM2 status without JSON parsing
+function Test-PM2ProcessRunning {
+    param([string]$ProcessName)
+    try {
+        $pm2Output = & pm2 list 2>&1
+        if ($pm2Output -match "$ProcessName.*online") {
+            return $true
+        }
+        return $false
+    }
+    catch {
+        return $false
+    }
+}
+
 # Set up error handling
 trap { Cleanup }
 
@@ -208,14 +223,10 @@ try {
     # Setup PM2 to start on system boot (Windows-specific approach)
     Set-PM2StartupTask
     
-    # Verify if the server is running
+    # Verify if the server is running using our custom function
     Write-Host "🔍 Verifying server status..." -ForegroundColor Yellow
     
-    # Use pm2 list instead of jlist to avoid JSON parsing issues
-    $pm2ListOutput = pm2 list
-    $isRunning = $pm2ListOutput | Select-String "posting-server.*online"
-    
-    if ($isRunning) {
+    if (Test-PM2ProcessRunning "posting-server") {
         Write-Host "✅ Posting server is running!" -ForegroundColor Green
     }
     else {
@@ -223,11 +234,7 @@ try {
         pm2 restart posting-server
         Start-Sleep -Seconds 3
         
-        # Check again after restart
-        $pm2ListOutputRetry = pm2 list
-        $isRunningRetry = $pm2ListOutputRetry | Select-String "posting-server.*online"
-        
-        if ($isRunningRetry) {
+        if (Test-PM2ProcessRunning "posting-server") {
             Write-Host "✅ Posting server restarted successfully!" -ForegroundColor Green
         }
         else {
@@ -238,9 +245,14 @@ try {
     
     # Optional: Install PM2 log rotation module
     Write-Host "🔧 Setting up PM2 log rotation..." -ForegroundColor Yellow
-    pm2 install pm2-logrotate
-    pm2 set pm2-logrotate:max_size 10M
-    pm2 set pm2-logrotate:compress true
+    try {
+        pm2 install pm2-logrotate
+        pm2 set pm2-logrotate:max_size 10M
+        pm2 set pm2-logrotate:compress true
+    }
+    catch {
+        Write-Host "⚠️ PM2 log rotation setup failed, but this won't affect the server operation." -ForegroundColor Yellow
+    }
     
     # Return to parent directory
     Set-Location ".."
