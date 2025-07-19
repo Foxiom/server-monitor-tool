@@ -161,20 +161,11 @@ try {
                 # Task doesn't exist, continue
             }
             
-            # Create the scheduled task with full path to PM2 and delay to ensure network is ready
+            # Create the scheduled task
             $action = New-ScheduledTaskAction -Execute $pm2Path -Argument "resurrect"
-            
-            # Add a 60-second delay to ensure network and services are ready
             $trigger = New-ScheduledTaskTrigger -AtStartup
-            $trigger.Delay = 'PT1M' # 1 minute delay after startup
-            
-            # Use SYSTEM account for more reliable startup
-            $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-            
-            # Configure advanced settings
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-                -StartWhenAvailable -DontStopOnIdleEnd -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
-                -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+            $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd
             
             $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description $taskDescription
             Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
