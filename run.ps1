@@ -148,7 +148,38 @@ function Install-Git {
     $env:Path = "$machinePath;$userPath"
 }
 
-# Function to create and install Windows Service for PM2 Posting Server
+# Function to install NSSM (Non-Sucking Service Manager) for better service handling
+function Install-NSSM {
+    Write-Host "📦 Installing NSSM (Non-Sucking Service Manager)..." -ForegroundColor Yellow
+    
+    if (!(Test-Command "choco")) {
+        Install-Chocolatey
+    }
+    
+    try {
+        choco install nssm -y
+        
+        # Refresh environment variables
+        $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+        $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
+        $env:Path = "$machinePath;$userPath"
+        
+        # Verify installation
+        if (Test-Command "nssm") {
+            Write-Host "✅ NSSM installed successfully!" -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "⚠️ NSSM installation verification failed" -ForegroundColor Yellow
+            return $false
+        }
+    }
+    catch {
+        Write-Host "❌ Failed to install NSSM: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
+    }
+}
+
+# Function to create and install Windows Service for PM2 Posting Server using NSSM
 function Setup-PM2WindowsService {
     Write-Host "🔧 Setting up PM2 Posting Server Windows Service..." -ForegroundColor Yellow
     
@@ -160,6 +191,18 @@ function Setup-PM2WindowsService {
         if (-not $isAdmin) {
             Write-Host "⚠️ Warning: Not running as Administrator. Service installation may fail." -ForegroundColor Yellow
             Write-Host "💡 For best results, run PowerShell as Administrator." -ForegroundColor Cyan
+        }
+        
+        # Install NSSM if not available
+        if (!(Test-Command "nssm")) {
+            Write-Host "📦 NSSM not found, installing..." -ForegroundColor Yellow
+            $nssmInstalled = Install-NSSM
+            if (-not $nssmInstalled) {
+                Write-Host "❌ Failed to install NSSM. Falling back to basic service creation." -ForegroundColor Red
+                return Setup-PM2BasicWindowsService
+            }
+        } else {
+            Write-Host "✅ NSSM already installed" -ForegroundColor Green
         }
         
         # Get current user info and paths
@@ -188,121 +231,97 @@ function Setup-PM2WindowsService {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
         
-        # Create service wrapper script
-        $ServiceScript = @"
-# PM2 Posting Server Service Wrapper Script
-# Set PM2 home directory explicitly
-`$env:PM2_HOME = "$PM2Home"
+        # Create batch wrapper script (more reliable for services than PowerShell)
+        $BatchScript = @"
+@echo off
+REM PM2 Posting Server Service Batch Wrapper
+setlocal EnableExtensions EnableDelayedExpansion
 
-# Set up logging function
-function Write-ServiceLog {
-    param([string]`$Message)
-    Add-Content -Path "$LogPath" -Value "[\`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$Message"
-}
+REM Set PM2_HOME environment variable
+set PM2_HOME=$PM2Home
 
-# Log service startup
-Write-ServiceLog "==================================="
-Write-ServiceLog "PM2 Posting Server Service Started"
-Write-ServiceLog "Current User: \`$env:USERNAME"
-Write-ServiceLog "PM2 Home: \`$env:PM2_HOME"
-Write-ServiceLog "Working Directory: $PostingServerPath"
+REM Log startup
+echo [%date% %time%] ===================================>> "$LogPath"
+echo [%date% %time%] PM2 Posting Server Service Started>> "$LogPath"
+echo [%date% %time%] Current User: %USERNAME%>> "$LogPath"
+echo [%date% %time%] PM2 Home: %PM2_HOME%>> "$LogPath"
+echo [%date% %time%] Working Directory: $PostingServerPath>> "$LogPath"
 
-# Change to posting server directory
-try {
-    Set-Location "$PostingServerPath"
-    Write-ServiceLog "Changed to directory: \`$(Get-Location)"
-}
-catch {
-    Write-ServiceLog "ERROR: Failed to change directory: \`$_"
-    exit 1
-}
+REM Change to posting server directory
+cd /d "$PostingServerPath"
+if %errorlevel% neq 0 (
+    echo [%date% %time%] ERROR: Failed to change directory>> "$LogPath"
+    exit /b 1
+)
 
-# Ensure environment path is loaded
-`$env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+REM Wait for system to stabilize
+timeout /t 30 /nobreak >nul
+echo [%date% %time%] System stabilization wait completed>> "$LogPath"
 
-# Wait for system to stabilize
-Start-Sleep -Seconds 30
-Write-ServiceLog "System stabilization wait completed"
+REM Load environment PATH
+for /f "tokens=2*" %%i in ('reg query "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "MachinePath=%%j"
+for /f "tokens=2*" %%i in ('reg query "HKEY_CURRENT_USER\Environment" /v Path 2^>nul') do set "UserPath=%%j"
+set "PATH=%MachinePath%;%UserPath%"
 
-# Check if PM2 is available
-try {
-    `$pm2Version = pm2 -v 2>&1
-    Write-ServiceLog "PM2 version: `$pm2Version"
-}
-catch {
-    Write-ServiceLog "ERROR: PM2 not found: \`$_"
-    exit 1
-}
+REM Check if PM2 is available
+pm2 -v >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [%date% %time%] ERROR: PM2 not found in PATH>> "$LogPath"
+    exit /b 1
+)
 
-# Check if PM2 dump file exists and try to resurrect
-`$dumpFile = Join-Path "$PM2Home" "dump.pm2"
-if (Test-Path `$dumpFile) {
-    Write-ServiceLog "PM2 dump file found, attempting resurrect..."
-    try {
-        `$resurrectOutput = pm2 resurrect 2>&1
-        Write-ServiceLog "PM2 resurrect output: `$resurrectOutput"
-        Start-Sleep -Seconds 10
-    }
-    catch {
-        Write-ServiceLog "PM2 resurrect failed: \`$_"
-    }
-}
-else {
-    Write-ServiceLog "No PM2 dump file found"
-}
+REM Get PM2 version
+for /f "delims=" %%i in ('pm2 -v 2^>^&1') do set pm2version=%%i
+echo [%date% %time%] PM2 version: %pm2version%>> "$LogPath"
 
-# Check if posting-server is running
-`$pm2List = pm2 list --no-colors 2>&1
-Write-ServiceLog "PM2 list output: `$pm2List"
+REM Check if PM2 dump file exists and try to resurrect
+if exist "%PM2_HOME%\dump.pm2" (
+    echo [%date% %time%] PM2 dump file found, attempting resurrect...>> "$LogPath"
+    pm2 resurrect >> "$LogPath" 2>&1
+    timeout /t 10 /nobreak >nul
+) else (
+    echo [%date% %time%] No PM2 dump file found>> "$LogPath"
+)
 
-if (`$pm2List -notmatch "posting-server.*online") {
-    Write-ServiceLog "Posting server not running, starting manually..."
-    try {
-        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
-        pm2 save
-        Write-ServiceLog "Posting server started and saved"
-        
-        # Verify it started
-        `$verifyList = pm2 list --no-colors 2>&1
-        Write-ServiceLog "Verification - PM2 list: `$verifyList"
-    }
-    catch {
-        Write-ServiceLog "ERROR: Failed to start posting server: \`$_"
-        exit 1
-    }
-}
-else {
-    Write-ServiceLog "Posting server already running"
-}
+REM Check if posting-server is running
+pm2 list --no-colors > "%TEMP%\pm2list.txt" 2>&1
+findstr "posting-server.*online" "%TEMP%\pm2list.txt" >nul
+if %errorlevel% neq 0 (
+    echo [%date% %time%] Posting server not running, starting manually...>> "$LogPath"
+    pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 >> "$LogPath" 2>&1
+    pm2 save >> "$LogPath" 2>&1
+    echo [%date% %time%] Posting server started and saved>> "$LogPath"
+    
+    REM Verify it started
+    pm2 list --no-colors >> "$LogPath" 2>&1
+) else (
+    echo [%date% %time%] Posting server already running>> "$LogPath"
+)
 
-Write-ServiceLog "PM2 Posting Server Service initialization completed successfully"
-Write-ServiceLog "==================================="
+echo [%date% %time%] PM2 Posting Server Service initialization completed>> "$LogPath"
+echo [%date% %time%] ===================================>> "$LogPath"
 
-# Keep the service running - monitor PM2 processes
-while (`$true) {
-    try {
-        Start-Sleep -Seconds 60
-        `$status = pm2 list --no-colors 2>&1
-        
-        # Check if posting-server process is still running
-        if (`$status -notmatch "posting-server.*online") {
-            Write-ServiceLog "WARNING: Posting server not online, attempting restart..."
-            pm2 restart posting-server 2>&1
-            pm2 save
-        }
-    }
-    catch {
-        Write-ServiceLog "ERROR in monitoring loop: \`$_"
-        Start-Sleep -Seconds 60
-    }
-}
+REM Keep the service running - monitor PM2 processes
+:monitor_loop
+timeout /t 60 /nobreak >nul
+
+REM Check if posting-server process is still running
+pm2 list --no-colors > "%TEMP%\pm2status.txt" 2>&1
+findstr "posting-server.*online" "%TEMP%\pm2status.txt" >nul
+if %errorlevel% neq 0 (
+    echo [%date% %time%] WARNING: Posting server not online, attempting restart...>> "$LogPath"
+    pm2 restart posting-server >> "$LogPath" 2>&1
+    pm2 save >> "$LogPath" 2>&1
+)
+
+goto monitor_loop
 "@
         
-        # Save the service script
-        $ServiceScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_service.ps1"
-        $ServiceScript | Out-File -FilePath $ServiceScriptPath -Encoding UTF8
+        # Save the batch script
+        $BatchScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_service.bat"
+        $BatchScript | Out-File -FilePath $BatchScriptPath -Encoding ASCII
         
-        Write-Host "📝 Service script created at: $ServiceScriptPath" -ForegroundColor Cyan
+        Write-Host "📝 Service batch script created at: $BatchScriptPath" -ForegroundColor Cyan
         
         # Remove existing service if it exists
         try {
@@ -310,10 +329,10 @@ while (`$true) {
             if ($existingService) {
                 Write-Host "🗑️ Removing existing service..." -ForegroundColor Yellow
                 if ($existingService.Status -eq "Running") {
-                    Stop-Service -Name $ServiceName -Force
+                    & nssm stop $ServiceName
                     Start-Sleep -Seconds 5
                 }
-                & sc.exe delete $ServiceName | Out-Null
+                & nssm remove $ServiceName confirm | Out-Null
                 Start-Sleep -Seconds 3
             }
         }
@@ -321,37 +340,38 @@ while (`$true) {
             Write-Host "⚠️ Warning during existing service cleanup: $($_.Exception.Message)" -ForegroundColor Yellow
         }
         
-        # Create the Windows service using sc.exe
-        Write-Host "🔧 Creating Windows service..." -ForegroundColor Yellow
+        # Create the Windows service using NSSM
+        Write-Host "🔧 Creating Windows service with NSSM..." -ForegroundColor Yellow
         
-        # Build the service command
-        $ServiceCommand = "powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ServiceScriptPath`""
-        
-        # Create service
-        $createResult = & sc.exe create $ServiceName binPath= $ServiceCommand DisplayName= $ServiceDisplayName start= auto
+        # Install the service
+        $installResult = & nssm install $ServiceName $BatchScriptPath 2>&1
         
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Failed to create service: $createResult" -ForegroundColor Red
+            Write-Host "❌ Failed to create service with NSSM: $installResult" -ForegroundColor Red
             return $false
         }
         
-        # Set service description
-        & sc.exe description $ServiceName $ServiceDescription | Out-Null
+        # Configure service parameters
+        & nssm set $ServiceName DisplayName $ServiceDisplayName | Out-Null
+        & nssm set $ServiceName Description $ServiceDescription | Out-Null
+        & nssm set $ServiceName Start SERVICE_AUTO_START | Out-Null
+        & nssm set $ServiceName AppDirectory $PostingServerPath | Out-Null
+        & nssm set $ServiceName AppStdout $LogPath | Out-Null
+        & nssm set $ServiceName AppStderr $LogPath | Out-Null
+        & nssm set $ServiceName AppStdoutCreationDisposition 4 | Out-Null
+        & nssm set $ServiceName AppStderrCreationDisposition 4 | Out-Null
+        & nssm set $ServiceName AppRotateFiles 1 | Out-Null
+        & nssm set $ServiceName AppRotateOnline 1 | Out-Null
+        & nssm set $ServiceName AppRotateSeconds 86400 | Out-Null
+        & nssm set $ServiceName AppRotateBytes 1048576 | Out-Null
         
-        # Configure service recovery options
-        & sc.exe failure $ServiceName reset= 86400 actions= restart/60000/restart/60000/restart/60000 | Out-Null
-        
-        # Set service to run as Local System (for broader permissions)
-        # Note: You can change this to run as a specific user if needed
-        & sc.exe config $ServiceName obj= "LocalSystem" | Out-Null
-        
-        Write-Host "✅ Windows service created successfully!" -ForegroundColor Green
+        Write-Host "✅ Windows service created successfully with NSSM!" -ForegroundColor Green
         
         # Start the service
         Write-Host "🚀 Starting PM2 Posting Server service..." -ForegroundColor Yellow
         try {
-            Start-Service -Name $ServiceName
-            Start-Sleep -Seconds 5
+            & nssm start $ServiceName
+            Start-Sleep -Seconds 10
             
             # Verify service is running
             $service = Get-Service -Name $ServiceName
@@ -359,11 +379,12 @@ while (`$true) {
                 Write-Host "✅ Service started successfully!" -ForegroundColor Green
             } else {
                 Write-Host "⚠️ Service created but not running. Status: $($service.Status)" -ForegroundColor Yellow
+                Write-Host "💡 Check service log at: $LogPath" -ForegroundColor Cyan
             }
         }
         catch {
             Write-Host "⚠️ Service created but failed to start: $($_.Exception.Message)" -ForegroundColor Yellow
-            Write-Host "💡 You can start it manually using: Start-Service -Name $ServiceName" -ForegroundColor Cyan
+            Write-Host "💡 You can start it manually using: nssm start $ServiceName" -ForegroundColor Cyan
         }
         
         # Display service information
@@ -372,21 +393,86 @@ while (`$true) {
         Write-Host "   Service Name: $ServiceName" -ForegroundColor White
         Write-Host "   Display Name: $ServiceDisplayName" -ForegroundColor White
         Write-Host "   Startup Type: Automatic" -ForegroundColor White
-        Write-Host "   Service Script: $ServiceScriptPath" -ForegroundColor White
+        Write-Host "   Service Script: $BatchScriptPath" -ForegroundColor White
         Write-Host "   Service Log: $LogPath" -ForegroundColor White
+        Write-Host "   Service Manager: NSSM" -ForegroundColor White
         Write-Host ""
         Write-Host "🔧 Service Management Commands:" -ForegroundColor Yellow
-        Write-Host "   Start-Service -Name $ServiceName        # Start the service" -ForegroundColor White
-        Write-Host "   Stop-Service -Name $ServiceName         # Stop the service" -ForegroundColor White
-        Write-Host "   Restart-Service -Name $ServiceName      # Restart the service" -ForegroundColor White
-        Write-Host "   Get-Service -Name $ServiceName          # Check service status" -ForegroundColor White
-        Write-Host "   sc.exe delete $ServiceName              # Remove the service (as Administrator)" -ForegroundColor White
+        Write-Host "   nssm start $ServiceName          # Start the service" -ForegroundColor White
+        Write-Host "   nssm stop $ServiceName           # Stop the service" -ForegroundColor White
+        Write-Host "   nssm restart $ServiceName        # Restart the service" -ForegroundColor White
+        Write-Host "   nssm status $ServiceName         # Check service status" -ForegroundColor White
+        Write-Host "   nssm remove $ServiceName confirm # Remove the service" -ForegroundColor White
+        Write-Host "   Get-Service -Name $ServiceName   # Check Windows service status" -ForegroundColor White
         
         return $true
     }
     catch {
         Write-Host "❌ Failed to setup Windows service: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "💡 Make sure you're running PowerShell as Administrator" -ForegroundColor Cyan
+        return $false
+    }
+}
+
+# Fallback function for basic Windows Service creation (without NSSM)
+function Setup-PM2BasicWindowsService {
+    Write-Host "🔧 Setting up basic Windows Service (fallback method)..." -ForegroundColor Yellow
+    
+    # Get paths
+    $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
+    $LogPath = Join-Path $env:USERPROFILE "logs\pm2-service.log"
+    $PM2Home = Join-Path $env:USERPROFILE ".pm2"
+    $ServiceName = "PM2PostingServer"
+    $ServiceDisplayName = "PM2 Posting Server"
+    $ServiceDescription = "PM2 Posting Server - Auto-starts posting server application on system boot"
+    
+    # Create a simple batch wrapper
+    $SimpleBatchScript = @"
+@echo off
+set PM2_HOME=$PM2Home
+cd /d "$PostingServerPath"
+echo [%date% %time%] Starting PM2 Posting Server Service >> "$LogPath"
+timeout /t 30 /nobreak >nul
+pm2 resurrect >> "$LogPath" 2>&1
+pm2 list >> "$LogPath" 2>&1
+:loop
+timeout /t 300 /nobreak >nul
+pm2 list > nul 2>&1
+if %errorlevel% neq 0 (
+    echo [%date% %time%] PM2 process check failed, restarting... >> "$LogPath"
+    pm2 restart all >> "$LogPath" 2>&1
+)
+goto loop
+"@
+    
+    $SimpleBatchScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_simple.bat"
+    $SimpleBatchScript | Out-File -FilePath $SimpleBatchScriptPath -Encoding ASCII
+    
+    try {
+        # Remove existing service
+        $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        if ($existingService) {
+            if ($existingService.Status -eq "Running") {
+                Stop-Service -Name $ServiceName -Force
+            }
+            & sc.exe delete $ServiceName | Out-Null
+            Start-Sleep -Seconds 3
+        }
+        
+        # Create basic service
+        $createResult = & sc.exe create $ServiceName binPath= $SimpleBatchScriptPath DisplayName= $ServiceDisplayName start= auto
+        
+        if ($LASTEXITCODE -eq 0) {
+            & sc.exe description $ServiceName $ServiceDescription | Out-Null
+            Write-Host "✅ Basic Windows service created successfully!" -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "❌ Failed to create basic service: $createResult" -ForegroundColor Red
+            return $false
+        }
+    }
+    catch {
+        Write-Host "❌ Basic service creation failed: $($_.Exception.Message)" -ForegroundColor Red
         return $false
     }
 }
