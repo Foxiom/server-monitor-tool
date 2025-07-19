@@ -232,25 +232,64 @@ function Setup-PM2WindowsService {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
         
-        # Create batch wrapper script
+        # Get npm global modules path for PM2
+        $npmGlobalPath = & npm config get prefix 2>$null
+        if (-not $npmGlobalPath) {
+            $npmGlobalPath = "$env:APPDATA\npm"
+        }
+        
+        # Create batch wrapper script with proper PATH setup
         $BatchScript = @"
 @echo off
 REM PM2 Posting Server Service Batch Wrapper
 setlocal EnableExtensions EnableDelayedExpansion
 
+REM Set environment variables
 set PM2_HOME=$PM2Home
-cd /d "$PostingServerPath"
+set NODE_PATH=$npmGlobalPath\node_modules
+set PATH=%PATH%;$npmGlobalPath;$env:ProgramFiles\nodejs;$env:ProgramFiles(x86)\nodejs
+
+REM Log environment info
 echo [%date% %time%] Starting PM2 Posting Server Service >> "$LogPath"
+echo [%date% %time%] NODE_PATH: %NODE_PATH% >> "$LogPath"
+echo [%date% %time%] PATH includes: $npmGlobalPath >> "$LogPath"
+
+REM Change to posting server directory
+cd /d "$PostingServerPath"
+if %errorlevel% neq 0 (
+    echo [%date% %time%] Failed to change directory to $PostingServerPath >> "$LogPath"
+    exit /b 1
+)
+
+REM Wait for system to stabilize
 timeout /t 30 /nobreak >nul
-pm2 resurrect >> "$LogPath" 2>&1
-pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >> "$LogPath" 2>&1
-pm2 save >> "$LogPath" 2>&1
+
+REM Check if PM2 is accessible
+where pm2 >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [%date% %time%] PM2 not found in PATH, trying full path... >> "$LogPath"
+    set PM2_CMD="$npmGlobalPath\pm2.cmd"
+) else (
+    echo [%date% %time%] PM2 found in PATH >> "$LogPath"
+    set PM2_CMD=pm2
+)
+
+REM Start PM2 processes
+echo [%date% %time%] Resurrecting PM2 processes... >> "$LogPath"
+%PM2_CMD% resurrect >> "$LogPath" 2>&1
+
+echo [%date% %time%] Starting posting-server... >> "$LogPath"
+%PM2_CMD% start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >> "$LogPath" 2>&1
+
+echo [%date% %time%] Saving PM2 process list... >> "$LogPath"
+%PM2_CMD% save >> "$LogPath" 2>&1
+
 :loop
 timeout /t 60 /nobreak >nul
-pm2 list > nul 2>&1
+%PM2_CMD% list > nul 2>&1
 if %errorlevel% neq 0 (
     echo [%date% %time%] PM2 process check failed, restarting... >> "$LogPath"
-    pm2 restart all >> "$LogPath" 2>&1
+    %PM2_CMD% restart all >> "$LogPath" 2>&1
 )
 goto loop
 "@
