@@ -1,3 +1,4 @@
+```powershell
 # PowerShell Script for Setting up Posting Server with Windows Service
 # Exit on error
 $ErrorActionPreference = "Stop"
@@ -125,7 +126,7 @@ function Install-NodeJS {
     if (!(Test-Command "choco")) {
         Install-Chocolatey
     }
-    ch catálogo install nodejs-lts -y
+    choco install nodejs-lts -y
     
     # Refresh environment variables
     $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -147,7 +148,7 @@ function Install-Git {
     $env:Path = "$machinePath;$userPath"
 }
 
-# Function to install NSSM (Non-Sucking Service Manager)
+# Function to install NSSM
 function Install-NSSM {
     Write-Host "📦 Installing NSSM..." -ForegroundColor Yellow
     if (!(Test-Command "choco")) {
@@ -249,7 +250,7 @@ if %errorlevel% neq 0 (
     pm2 resurrect >> "$LogPath" 2>&1
     if %errorlevel% neq 0 (
         echo [%date% %time%] ERROR: PM2 resurrection failed, starting fresh... >> "$LogPath"
-        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >> "$LogPath" 2>&1
+        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 >> "$LogPath" 2>&1
     )
 ) else (
     echo [%date% %time%] PM2 daemon running, resurrecting processes... >> "$LogPath"
@@ -275,7 +276,7 @@ if %errorlevel% neq 0 (
         echo [%date% %time%] ERROR: Restart failed, starting fresh... >> "$LogPath"
         pm2 stop posting-server >nul 2>&1
         pm2 delete posting-server >nul 2>&1
-        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >> "$LogPath" 2>&1
+        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 >> "$LogPath" 2>&1
         pm2 save >> "$LogPath" 2>&1
     )
 )
@@ -325,7 +326,7 @@ goto monitor_loop
         & nssm set $ServiceName AppRotateSeconds 86400 | Out-Null
         & nssm set $ServiceName AppRotateBytes 10485760 | Out-Null
         
-        # Configure service to run as LocalSystem (default) with access to desktop
+        # Configure service to run as LocalSystem
         & nssm set $ServiceName ObjectName LocalSystem | Out-Null
         & nssm set $ServiceName Type SERVICE_WIN32_OWN_PROCESS | Out-Null
         
@@ -446,8 +447,24 @@ $logsPath = Join-Path (Get-Location).Path "../logs"
 
 # Start the server with PM2
 Write-Host "🚀 Starting posting server with PM2..." -ForegroundColor Green
-pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s
-pm2 save
+try {
+    pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
+    Start-Sleep -Seconds 5
+    $pm2Status = pm2 list | Out-String
+    if ($pm2Status -match "posting-server.*online") {
+        Write-Host "✅ Posting server started successfully!" -ForegroundColor Green
+        pm2 save
+        Write-Host "💾 PM2 process list saved." -ForegroundColor Yellow
+    } else {
+        Write-Host "❌ Failed to start posting server initially. Check logs with 'pm2 logs posting-server'." -ForegroundColor Red
+        exit 1
+    }
+}
+catch {
+    Write-Host "❌ Error starting posting server: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "💡 Check logs with 'pm2 logs posting-server'." -ForegroundColor Cyan
+    exit 1
+}
 
 # Setup Windows Service
 Write-Host "🔧 Setting up Windows Service for PM2 auto-start..." -ForegroundColor Yellow
@@ -467,12 +484,21 @@ if ($pm2Status -match "posting-server.*online") {
     Write-Host "✅ Posting server is running!" -ForegroundColor Green
 } else {
     Write-Host "⚠️ Posting server is not running. Attempting to restart..." -ForegroundColor Yellow
-    pm2 restart posting-server
-    $pm2Status = pm2 list | Out-String
-    if ($pm2Status -match "posting-server.*online") {
-        Write-Host "✅ Posting server restarted successfully!" -ForegroundColor Green
-    } else {
-        Write-Host "❌ Failed to start posting server. Check logs with 'pm2 logs posting-server'." -ForegroundColor Red
+    try {
+        pm2 restart posting-server
+        Start-Sleep -Seconds 5
+        $pm2Status = pm2 list | Out-String
+        if ($pm2Status -match "posting-server.*online") {
+            Write-Host "✅ Posting server restarted successfully!" -ForegroundColor Green
+            pm2 save
+        } else {
+            Write-Host "❌ Failed to restart posting server. Check logs with 'pm2 logs posting-server'." -ForegroundColor Red
+            exit 1
+        }
+    }
+    catch {
+        Write-Host "❌ Error restarting posting server: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "💡 Check logs with 'pm2 logs posting-server'." -ForegroundColor Cyan
         exit 1
     }
 }
@@ -522,3 +548,4 @@ Write-Host "   1. Restart your computer" -ForegroundColor White
 Write-Host "   2. Run 'Get-Service -Name PM2PostingServer' to verify service" -ForegroundColor White
 Write-Host "   3. Run 'pm2 status' to verify server" -ForegroundColor White
 Write-Host "   4. Check logs at 'logs\pm2-service.log'" -ForegroundColor White
+```
