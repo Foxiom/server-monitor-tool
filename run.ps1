@@ -246,9 +246,16 @@ set PM2_HOME=$PM2Home
 REM Create a function for safe logging to avoid file locking issues
 :log_message
 set "msg=%~1"
-for /f "tokens=1-2 delims= " %%a in ('%date% %time%') do (
-    echo [%%a %%b] %msg%>> "$LogPath" 2>nul
-)
+REM Use a more reliable method to get date and time
+for /f "tokens=2 delims==" %%a in ('wmic OS Get localdatetime /value') do set dt=%%a
+set "year=%dt:~0,4%"
+set "month=%dt:~4,2%"
+set "day=%dt:~6,2%"
+set "hour=%dt:~8,2%"
+set "minute=%dt:~10,2%"
+set "second=%dt:~12,2%"
+set "timestamp=%year%-%month%-%day% %hour%:%minute%:%second%"
+echo [%timestamp%] %msg%>> "$LogPath" 2>nul
 goto :eof
 
 REM Log startup
@@ -402,7 +409,6 @@ if %errorlevel% neq 0 (
     pm2 save >nul 2>&1
 ) else (
     REM Server is running, log periodic health check
-    for /f "tokens=1-2 delims= " %%a in ('%date% %time%') do set current_time=%%a %%b
     if defined last_health_log (
         REM Only log health status every 10 minutes to avoid log spam
         set /a health_counter+=1
@@ -414,7 +420,7 @@ if %errorlevel% neq 0 (
         call :log_message "Health check: Posting server running normally"
         set health_counter=0
     )
-    set last_health_log=!current_time!
+    set last_health_log=1
 )
 
 goto monitor_loop
