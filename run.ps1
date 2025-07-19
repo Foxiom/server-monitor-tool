@@ -148,7 +148,7 @@ function Install-Git {
     $env:Path = "$machinePath;$userPath"
 }
 
-# Function to install NSSM (Non-Sucking Service Manager) for better service handling
+# Function to install NSSM (Non-Sucking Service Manager)
 function Install-NSSM {
     Write-Host "📦 Installing NSSM (Non-Sucking Service Manager)..." -ForegroundColor Yellow
     
@@ -189,8 +189,9 @@ function Setup-PM2WindowsService {
         $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         
         if (-not $isAdmin) {
-            Write-Host "⚠️ Warning: Not running as Administrator. Service installation may fail." -ForegroundColor Yellow
-            Write-Host "💡 For best results, run PowerShell as Administrator." -ForegroundColor Cyan
+            Write-Host "❌ This script must be run as Administrator to create Windows Services." -ForegroundColor Red
+            Write-Host "💡 Please run PowerShell as Administrator and try again." -ForegroundColor Cyan
+            throw "Administrator privileges required"
         }
         
         # Install NSSM if not available
@@ -198,16 +199,14 @@ function Setup-PM2WindowsService {
             Write-Host "📦 NSSM not found, installing..." -ForegroundColor Yellow
             $nssmInstalled = Install-NSSM
             if (-not $nssmInstalled) {
-                Write-Host "❌ Failed to install NSSM. Falling back to basic service creation." -ForegroundColor Red
-                return Setup-PM2BasicWindowsService
+                Write-Host "❌ Failed to install NSSM. Cannot proceed with service creation." -ForegroundColor Red
+                throw "NSSM installation failed"
             }
         } else {
             Write-Host "✅ NSSM already installed" -ForegroundColor Green
         }
         
         # Get current user info and paths
-        $CurrentUser = $env:USERNAME
-        $CurrentDomain = $env:USERDOMAIN
         $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
         $LogDir = Join-Path $env:USERPROFILE "logs"
         $LogPath = Join-Path $LogDir "pm2-service.log"
@@ -229,182 +228,31 @@ function Setup-PM2WindowsService {
         $env:PM2_HOME = $PM2Home
         
         # Create logs directory if it doesn't exist
-        $LogDir = Split-Path $LogPath -Parent
         if (!(Test-Path $LogDir)) {
             New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
         }
         
-        # Create batch wrapper script (more reliable for services than PowerShell)
+        # Create batch wrapper script
         $BatchScript = @"
 @echo off
 REM PM2 Posting Server Service Batch Wrapper
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM Set PM2_HOME environment variable
 set PM2_HOME=$PM2Home
-
-REM Create a function for safe logging to avoid file locking issues
-:log_message
-set "msg=%~1"
-REM Use a more reliable method to get date and time
-for /f "tokens=2 delims==" %%a in ('wmic OS Get localdatetime /value') do set dt=%%a
-set "year=%dt:~0,4%"
-set "month=%dt:~4,2%"
-set "day=%dt:~6,2%"
-set "hour=%dt:~8,2%"
-set "minute=%dt:~10,2%"
-set "second=%dt:~12,2%"
-set "timestamp=%year%-%month%-%day% %hour%:%minute%:%second%"
-echo [%timestamp%] %msg%>> "$LogPath" 2>nul
-goto :eof
-
-REM Log startup
-call :log_message "==================================="
-call :log_message "PM2 Posting Server Service Started"
-call :log_message "Current User: %USERNAME%"
-call :log_message "PM2 Home: %PM2_HOME%"
-call :log_message "Working Directory: $PostingServerPath"
-
-REM Change to posting server directory
 cd /d "$PostingServerPath"
-if %errorlevel% neq 0 (
-    call :log_message "ERROR: Failed to change directory"
-    exit /b 1
-)
-
-REM Wait for system to stabilize
+echo [%date% %time%] Starting PM2 Posting Server Service >> "$LogPath"
 timeout /t 30 /nobreak >nul
-call :log_message "System stabilization wait completed"
-
-REM Load environment PATH
-for /f "tokens=2*" %%i in ('reg query "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "MachinePath=%%j"
-for /f "tokens=2*" %%i in ('reg query "HKEY_CURRENT_USER\Environment" /v Path 2^>nul') do set "UserPath=%%j"
-set "PATH=%MachinePath%;%UserPath%"
-
-REM Check if PM2 is available
-pm2 -v >nul 2>&1
-if %errorlevel% neq 0 (
-    call :log_message "ERROR: PM2 not found in PATH"
-    exit /b 1
-)
-
-REM Get PM2 version
-for /f "delims=" %%i in ('pm2 -v 2^>^&1') do set pm2version=%%i
-call :log_message "PM2 version: %pm2version%"
-
-REM Enhanced PM2 resurrection and startup logic for server monitoring
-REM First, clean up any orphaned PM2 processes
-call :log_message "Cleaning up any orphaned PM2 processes..."
-pm2 kill >nul 2>&1
-timeout /t 5 /nobreak >nul
-
-REM Initialize PM2 daemon
-call :log_message "Initializing PM2 daemon..."
-pm2 ping >nul 2>&1
-if %errorlevel% neq 0 (
-    call :log_message "PM2 daemon not responding, force starting..."
-    pm2 start ecosystem.config.js >nul 2>&1
-    timeout /t 5 /nobreak >nul
-)
-
-REM Check if PM2 dump file exists and try to resurrect
-if exist "%PM2_HOME%\dump.pm2" (
-    call :log_message "PM2 dump file found, attempting resurrect..."
-    pm2 resurrect >nul 2>&1
-    timeout /t 15 /nobreak >nul
-    call :log_message "PM2 resurrect completed"
-) else (
-    call :log_message "No PM2 dump file found, will start fresh"
-)
-
-REM Check if posting-server is running after resurrection
-pm2 list --no-colors > "%TEMP%\pm2list.txt" 2>&1
-findstr "posting-server.*online" "%TEMP%\pm2list.txt" >nul
-if %errorlevel% neq 0 (
-    call :log_message "Posting server not running, starting manually..."
-    
-    REM Stop any existing posting-server instances first
-    pm2 stop posting-server >nul 2>&1
-    pm2 delete posting-server >nul 2>&1
-    timeout /t 3 /nobreak >nul
-    
-    REM Start fresh posting-server instance
-    pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >nul 2>&1
-    if %errorlevel% equ 0 (
-        call :log_message "Posting server started successfully"
-        pm2 save >nul 2>&1
-        call :log_message "PM2 configuration saved"
-    ) else (
-        call :log_message "ERROR: Failed to start posting server"
-    )
-) else (
-    call :log_message "Posting server already running after resurrection"
-)
-
-REM Enable PM2 startup for future reboots
-call :log_message "Configuring PM2 startup for future reboots..."
-pm2 startup >nul 2>&1
-pm2 save >nul 2>&1
-
-call :log_message "PM2 Posting Server Service initialization completed"
-call :log_message "==================================="
-
-REM Keep the service running - enhanced monitoring for server monitoring tool
-:monitor_loop
+pm2 resurrect >> "$LogPath" 2>&1
+pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >> "$LogPath" 2>&1
+pm2 save >> "$LogPath" 2>&1
+:loop
 timeout /t 60 /nobreak >nul
-
-REM Check if PM2 daemon is still alive
-pm2 ping >nul 2>&1
+pm2 list > nul 2>&1
 if %errorlevel% neq 0 (
-    call :log_message "WARNING: PM2 daemon not responding, reinitializing..."
-    pm2 kill >nul 2>&1
-    timeout /t 5 /nobreak >nul
-    pm2 resurrect >nul 2>&1
-    timeout /t 10 /nobreak >nul
+    echo [%date% %time%] PM2 process check failed, restarting... >> "$LogPath"
+    pm2 restart all >> "$LogPath" 2>&1
 )
-
-REM Check if posting-server process is still running
-pm2 list --no-colors > "%TEMP%\pm2status.txt" 2>&1
-findstr "posting-server.*online" "%TEMP%\pm2status.txt" >nul
-if %errorlevel% neq 0 (
-    call :log_message "WARNING: Posting server not online, attempting recovery..."
-    
-    REM Try restart first
-    pm2 restart posting-server >nul 2>&1
-    timeout /t 10 /nobreak >nul
-    
-    REM Verify restart worked
-    pm2 list --no-colors > "%TEMP%\pm2restart_check.txt" 2>&1
-    findstr "posting-server.*online" "%TEMP%\pm2restart_check.txt" >nul
-    if %errorlevel% neq 0 (
-        call :log_message "Restart failed, attempting fresh start..."
-        pm2 stop posting-server >nul 2>&1
-        pm2 delete posting-server >nul 2>&1
-        timeout /t 3 /nobreak >nul
-        pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100 --max-restarts=10 --min-uptime=10s >nul 2>&1
-        pm2 save >nul 2>&1
-        call :log_message "Fresh posting server instance started"
-    ) else (
-        call :log_message "Posting server restart successful"
-    )
-    pm2 save >nul 2>&1
-) else (
-    REM Server is running, log periodic health check
-    if defined last_health_log (
-        REM Only log health status every 10 minutes to avoid log spam
-        set /a health_counter+=1
-        if !health_counter! geq 10 (
-            call :log_message "Health check: Posting server running normally"
-            set health_counter=0
-        )
-    ) else (
-        call :log_message "Health check: Posting server running normally"
-        set health_counter=0
-    )
-    set last_health_log=1
-)
-
-goto monitor_loop
+goto loop
 "@
         
         # Save the batch script
@@ -438,7 +286,7 @@ goto monitor_loop
         
         if ($LASTEXITCODE -ne 0) {
             Write-Host "❌ Failed to create service with NSSM: $installResult" -ForegroundColor Red
-            return $false
+            throw "Service creation failed"
         }
         
         # Configure service parameters
@@ -447,22 +295,22 @@ goto monitor_loop
         & nssm set $ServiceName Start SERVICE_AUTO_START | Out-Null
         & nssm set $ServiceName AppDirectory $PostingServerPath | Out-Null
         
-        # Separate stdout and stderr to avoid file locking conflicts
+        # Configure logging
         & nssm set $ServiceName AppStdout $StdoutLogPath | Out-Null
         & nssm set $ServiceName AppStderr $StderrLogPath | Out-Null
         & nssm set $ServiceName AppStdoutCreationDisposition 4 | Out-Null
         & nssm set $ServiceName AppStderrCreationDisposition 4 | Out-Null
         
-        # Configure log rotation to prevent large files
+        # Configure log rotation
         & nssm set $ServiceName AppRotateFiles 1 | Out-Null
         & nssm set $ServiceName AppRotateOnline 1 | Out-Null
-        & nssm set $ServiceName AppRotateSeconds 86400 | Out-Null  # Daily rotation
-        & nssm set $ServiceName AppRotateBytes 10485760 | Out-Null  # 10MB max size
+        & nssm set $ServiceName AppRotateSeconds 86400 | Out-Null
+        & nssm set $ServiceName AppRotateBytes 10485760 | Out-Null
         
         # Set service to restart on failure
         & nssm set $ServiceName AppExit Default Restart | Out-Null
-        & nssm set $ServiceName AppRestartDelay 5000 | Out-Null  # 5 second delay
-        & nssm set $ServiceName AppThrottle 10000 | Out-Null     # 10 second throttle
+        & nssm set $ServiceName AppRestartDelay 5000 | Out-Null
+        & nssm set $ServiceName AppThrottle 10000 | Out-Null
         
         Write-Host "✅ Windows service created successfully with NSSM!" -ForegroundColor Green
         
@@ -511,69 +359,6 @@ goto monitor_loop
     catch {
         Write-Host "❌ Failed to setup Windows service: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host "💡 Make sure you're running PowerShell as Administrator" -ForegroundColor Cyan
-        return $false
-    }
-}
-
-# Fallback function for basic Windows Service creation (without NSSM)
-function Setup-PM2BasicWindowsService {
-    Write-Host "🔧 Setting up basic Windows Service (fallback method)..." -ForegroundColor Yellow
-    
-    # Get paths
-    $PostingServerPath = Join-Path $env:USERPROFILE "posting_server"
-    $LogPath = Join-Path $env:USERPROFILE "logs\pm2-service.log"
-    $PM2Home = Join-Path $env:USERPROFILE ".pm2"
-    $ServiceName = "PM2PostingServer"
-    $ServiceDisplayName = "PM2 Posting Server"
-    $ServiceDescription = "PM2 Posting Server - Auto-starts posting server application on system boot"
-    
-    # Create a simple batch wrapper
-    $SimpleBatchScript = @"
-@echo off
-set PM2_HOME=$PM2Home
-cd /d "$PostingServerPath"
-echo [%date% %time%] Starting PM2 Posting Server Service >> "$LogPath"
-timeout /t 30 /nobreak >nul
-pm2 resurrect >> "$LogPath" 2>&1
-pm2 list >> "$LogPath" 2>&1
-:loop
-timeout /t 300 /nobreak >nul
-pm2 list > nul 2>&1
-if %errorlevel% neq 0 (
-    echo [%date% %time%] PM2 process check failed, restarting... >> "$LogPath"
-    pm2 restart all >> "$LogPath" 2>&1
-)
-goto loop
-"@
-    
-    $SimpleBatchScriptPath = Join-Path $env:USERPROFILE "pm2_posting_server_simple.bat"
-    $SimpleBatchScript | Out-File -FilePath $SimpleBatchScriptPath -Encoding ASCII
-    
-    try {
-        # Remove existing service
-        $existingService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-        if ($existingService) {
-            if ($existingService.Status -eq "Running") {
-                Stop-Service -Name $ServiceName -Force
-            }
-            & sc.exe delete $ServiceName | Out-Null
-            Start-Sleep -Seconds 3
-        }
-        
-        # Create basic service
-        $createResult = & sc.exe create $ServiceName binPath= $SimpleBatchScriptPath DisplayName= $ServiceDisplayName start= auto
-        
-        if ($LASTEXITCODE -eq 0) {
-            & sc.exe description $ServiceName $ServiceDescription | Out-Null
-            Write-Host "✅ Basic Windows service created successfully!" -ForegroundColor Green
-            return $true
-        } else {
-            Write-Host "❌ Failed to create basic service: $createResult" -ForegroundColor Red
-            return $false
-        }
-    }
-    catch {
-        Write-Host "❌ Basic service creation failed: $($_.Exception.Message)" -ForegroundColor Red
         return $false
     }
 }
@@ -639,7 +424,7 @@ Set-Location "posting_server"
 Write-Host "📦 Installing posting server dependencies..." -ForegroundColor Yellow
 npm install
 
-# Set posting server permissions (Windows equivalent)
+# Set posting server permissions
 Write-Host "🔒 Setting up permissions..." -ForegroundColor Yellow
 Get-ChildItem -Recurse | ForEach-Object {
     if ($_.PSIsContainer) {
@@ -658,43 +443,19 @@ Write-Host "🚀 Starting posting server with PM2..." -ForegroundColor Green
 pm2 start server.js --name "posting-server" --log "../logs/posting-server.log" --exp-backoff-restart-delay=100
 
 # Save PM2 process list
-Write-Host "💾 Startup PM2 process list..." -ForegroundColor Yellow
-pm2 startup
-
 Write-Host "💾 Saving PM2 process list..." -ForegroundColor Yellow
 pm2 save
 
-# Setup PM2 to start on system boot (same approach as Linux script)
+# Setup Windows Service using NSSM
 Write-Host "🔧 Setting up PM2 to start on system boot..." -ForegroundColor Yellow
-try {
-    # Use PM2's built-in startup command for Windows
-    $startupOutput = pm2 startup 2>&1 | Out-String
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "✅ PM2 startup script configured successfully." -ForegroundColor Green
-        
-        # Check if startup output contains Windows-specific instructions
-        if ($startupOutput -match "copy.*paste.*command") {
-            Write-Host "💡 PM2 startup configured. The startup script will handle auto-start on boot." -ForegroundColor Cyan
-        }
-        
-        $serviceSetupSuccess = $true
-    } else {
-        Write-Host "⚠️ Warning: PM2 startup script may not have been configured correctly." -ForegroundColor Yellow
-        Write-Host "💡 You can manually configure it later with 'pm2 startup'" -ForegroundColor Cyan
-        $serviceSetupSuccess = $false
-    }
-} catch {
-    Write-Host "⚠️ Warning: Failed to configure PM2 startup: $($_.Exception.Message)" -ForegroundColor Yellow
-    Write-Host "💡 You can manually configure it later with 'pm2 startup'" -ForegroundColor Cyan
-    $serviceSetupSuccess = $false
-}
+$serviceSetupSuccess = Setup-PM2WindowsService
 
 if ($serviceSetupSuccess) {
     Write-Host "✅ Windows Service configured successfully!" -ForegroundColor Green
 } else {
-    Write-Host "⚠️ Warning: Windows Service setup failed. Server will need to be started manually after reboot." -ForegroundColor Yellow
-    Write-Host "💡 Try running this script as Administrator for service installation." -ForegroundColor Cyan
+    Write-Host "❌ Windows Service setup failed." -ForegroundColor Red
+    Write-Host "💡 Please run this script as Administrator to enable auto-start on boot." -ForegroundColor Cyan
+    Write-Host "💡 Alternatively, start the server manually after reboot with 'pm2 resurrect'" -ForegroundColor Cyan
 }
 
 # Verify if the server is running
@@ -731,7 +492,7 @@ if ($currentConfig -notmatch "max_size.*10M") {
 }
 
 Write-Host ""
-Write-Host "✅ Server started and configured to run on system boot!" -ForegroundColor Green
+Write-Host "✅ Server setup completed!" -ForegroundColor Green
 Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
 Write-Host "   - config/" -ForegroundColor White
 Write-Host "   - models/" -ForegroundColor White
@@ -739,14 +500,20 @@ Write-Host "   - utils/" -ForegroundColor White
 Write-Host "   - server.js" -ForegroundColor White
 Write-Host "   - package.json" -ForegroundColor White
 Write-Host ""
-Write-Host "🔧 PM2 Auto-Start Information:" -ForegroundColor Yellow
-Write-Host "   - PM2 processes will auto-start on system boot via 'pm2 startup'" -ForegroundColor White
-Write-Host "   - PM2 startup script configured for Windows" -ForegroundColor White
-Write-Host "   - Process list saved with 'pm2 save' for resurrection after reboot" -ForegroundColor White
-Write-Host "   - No additional Windows service installation required" -ForegroundColor White
-Write-Host "   - PM2 logs: Use 'pm2 logs' command to view application logs" -ForegroundColor White
+Write-Host "🔧 Service Information:" -ForegroundColor Yellow
+Write-Host "   - Windows Service: PM2PostingServer (auto-starts on boot)" -ForegroundColor White
+Write-Host "   - PM2 Process: posting-server" -ForegroundColor White
+Write-Host "   - Logs: $env:USERPROFILE\logs" -ForegroundColor White
 Write-Host ""
-Write-Host "To manage the PM2 server, use these commands:" -ForegroundColor Yellow
+Write-Host "To manage the Windows Service:" -ForegroundColor Yellow
+Write-Host "  - nssm start PM2PostingServer          # Start the service" -ForegroundColor White
+Write-Host "  - nssm stop PM2PostingServer           # Stop the service" -ForegroundColor White
+Write-Host "  - nssm restart PM2PostingServer        # Restart the service" -ForegroundColor White
+Write-Host "  - nssm status PM2PostingServer         # Check service status" -ForegroundColor White
+Write-Host "  - nssm remove PM2PostingServer confirm # Remove the service" -ForegroundColor White
+Write-Host "  - Get-Service -Name PM2PostingServer   # Check Windows service status" -ForegroundColor White
+Write-Host ""
+Write-Host "To manage the PM2 server:" -ForegroundColor Yellow
 Write-Host "  - pm2 status              # Check server status" -ForegroundColor White
 Write-Host "  - pm2 logs                # View all logs" -ForegroundColor White
 Write-Host "  - pm2 logs posting-server # View posting server logs" -ForegroundColor White
@@ -754,16 +521,9 @@ Write-Host "  - pm2 stop all           # Stop the server" -ForegroundColor White
 Write-Host "  - pm2 restart all        # Restart the server" -ForegroundColor White
 Write-Host "  - pm2 delete posting-server # Remove the server from PM2" -ForegroundColor White
 Write-Host ""
-Write-Host "To manage PM2 auto-startup:" -ForegroundColor Yellow
-Write-Host "  - pm2 startup                       # Configure PM2 to start on boot" -ForegroundColor White
-Write-Host "  - pm2 save                          # Save current PM2 process list" -ForegroundColor White
-Write-Host "  - pm2 resurrect                     # Restore saved PM2 processes" -ForegroundColor White
-Write-Host "  - pm2 unstartup                     # Remove PM2 from startup (if needed)" -ForegroundColor White
-Write-Host "  - pm2 startup --help                # View startup command options" -ForegroundColor White
-Write-Host ""
-Write-Host "To test auto-startup after reboot/power loss:" -ForegroundColor Cyan
-Write-Host "  1. Restart your computer or simulate power loss" -ForegroundColor White
+Write-Host "To test auto-startup after reboot:" -ForegroundColor Cyan
+Write-Host "  1. Restart your computer" -ForegroundColor White
 Write-Host "  2. Wait for system to fully boot" -ForegroundColor White
-Write-Host "  3. Check PM2 service: 'Get-Service -Name PM2'" -ForegroundColor White
-Write-Host "  4. Check posting server: 'pm2 status'" -ForegroundColor White
+Write-Host "  3. Check service status: 'Get-Service -Name PM2PostingServer'" -ForegroundColor White
+Write-Host "  4. Check PM2 status: 'pm2 status'" -ForegroundColor White
 Write-Host "  5. Verify server monitoring is working" -ForegroundColor White
