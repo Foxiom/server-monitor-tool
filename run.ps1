@@ -73,7 +73,7 @@ New-Item -ItemType Directory -Force -Path "logs"
 # Setup posting server
 Write-Host "🔧 Setting up posting server..."
 
-# Clone the repository to a temporary directory
+# Clone the repository to a temporary directory (shallow clone for efficiency)
 Write-Host "⬇️ Downloading complete posting server from GitHub..."
 $env:TEMP_DIR = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
 New-Item -ItemType Directory -Path $env:TEMP_DIR
@@ -95,25 +95,11 @@ npm install
 
 # Set posting server permissions
 Write-Host "🔒 Setting up permissions..."
-icacls "." /grant "Everyone:(OI)(CI)F"
-icacls *.js /grant "Everyone:R"
-icacls *.json /grant "Everyone:R"
-icacls ".." /grant "Everyone:(OI)(CI)F"
-icacls "..\logs" /grant "Everyone:(OI)(CI)F"
-
-# Install PM2 as a Windows service using pm2-installer
-Write-Host "🔧 Setting up PM2 as a Windows service..."
-$pm2InstallerDir = "pm2-installer"
-if (Test-Path $pm2InstallerDir) {
-    Remove-Item -Recurse -Force $pm2InstallerDir
-}
-Write-Host "⬇️ Downloading pm2-installer..."
-git clone --depth 1 https://github.com/jessety/pm2-installer.git $pm2InstallerDir
-Set-Location $pm2InstallerDir
-npm run configure
-npm run configure-policy
-npm run setup
-Set-Location ..
+icacls "." /grant "Everyone:(OI)(CI)F" /Q
+Get-ChildItem -Filter "*.js" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q }
+Get-ChildItem -Filter "*.json" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q }
+Get-ChildItem -Directory | ForEach-Object { icacls $_.Name /grant "Everyone:(OI)(CI)F" /Q }
+icacls "..\logs" /grant "Everyone:(OI)(CI)F" /Q
 
 # Start the server using PM2 with exponential backoff restart
 Write-Host "🚀 Starting posting server with PM2..."
@@ -122,6 +108,81 @@ pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --e
 # Save PM2 process list
 Write-Host "💾 Saving PM2 process list..."
 pm2 save
+
+# Setup PM2 to start on system boot (Windows approach)
+Write-Host "🔧 Setting up PM2 to start on system boot..."
+try {
+    # Try the standard pm2 startup command first (will fail on Windows but we handle it)
+    $startupOutput = pm2 startup 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✅ PM2 startup script configured successfully."
+    } else {
+        throw "PM2 startup failed"
+    }
+} catch {
+    Write-Host "⚠️ Standard PM2 startup not supported on Windows. Setting up Task Scheduler..."
+    
+    # Check if running as Administrator
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
+    
+    if (-not $isAdmin) {
+        Write-Host "⚠️ Administrator privileges required for Task Scheduler setup." -ForegroundColor Yellow
+        Write-Host "📋 Manual setup instructions:" -ForegroundColor Cyan
+        Write-Host "   1. Run PowerShell as Administrator"
+        Write-Host "   2. Re-run this script, or manually create Task Scheduler entry:"
+        Write-Host "      - Open Task Scheduler"
+        Write-Host "      - Create Basic Task: 'PM2 Auto Start'"
+        Write-Host "      - Trigger: 'When the computer starts'"
+        Write-Host "      - Action: 'Start a program'"
+        Write-Host "      - Program: 'pm2'"
+        Write-Host "      - Arguments: 'resurrect'"
+        Write-Host "      - Check 'Run with highest privileges'"
+    } else {
+        try {
+            # Get PM2 executable path
+            $pm2Path = (Get-Command pm2).Source
+            Write-Host "✅ Found PM2 at: $pm2Path"
+            
+            # Get current user
+            $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+            
+            # Task details
+            $taskName = "PM2 Auto Start"
+            $taskDescription = "Automatically start PM2 processes on system boot"
+            
+            # Remove existing task if it exists
+            try {
+                $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                if ($existingTask) {
+                    Write-Host "🗑️ Removing existing PM2 Auto Start task..."
+                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+                }
+            } catch {
+                # Task doesn't exist, continue
+            }
+            
+            # Create the scheduled task
+            $action = New-ScheduledTaskAction -Execute $pm2Path -Argument "resurrect"
+            $trigger = New-ScheduledTaskTrigger -AtStartup
+            $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd
+            
+            $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description $taskDescription
+            Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
+            
+            Write-Host "✅ Successfully created '$taskName' scheduled task!"
+            Write-Host "📋 Task configured to run 'pm2 resurrect' at system startup with highest privileges"
+            
+        } catch {
+            Write-Host "❌ Failed to create scheduled task: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "📋 Please manually create the task using Task Scheduler:" -ForegroundColor Yellow
+            Write-Host "   - Task Name: PM2 Auto Start"
+            Write-Host "   - Trigger: At startup"
+            Write-Host "   - Action: pm2 resurrect"
+            Write-Host "   - Run with highest privileges"
+        }
+    }
+}
 
 # Verify if the server is running
 Write-Host "🔍 Verifying server status..."
@@ -144,9 +205,9 @@ if ($pm2Status) {
 Write-Host "🔧 Setting up PM2 log rotation..."
 pm2 install pm2-logrotate
 pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:compress $true
+pm2 set pm2-logrotate:compress true
 
-Write-Host "✅ Server started and configured to run on system boot!"
+Write-Host "✅ Server started and configured!"
 Write-Host "📁 Downloaded complete posting server with all folders:"
 Write-Host "   - config/"
 Write-Host "   - models/"
@@ -161,3 +222,5 @@ Write-Host "  - pm2 logs posting-server # View posting server logs"
 Write-Host "  - pm2 stop all           # Stop the server"
 Write-Host "  - pm2 restart all        # Restart the server"
 Write-Host "  - pm2 delete posting-server # Remove the server from PM2"
+Write-Host "  - pm2 save               # Save current process list"
+Write-Host "  - pm2 resurrect          # Restore saved processes"
