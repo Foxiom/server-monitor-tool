@@ -61,9 +61,6 @@ if (-not (Command-Exists pm2)) {
     npm install -g pm2
 }
 
-# Define PM2 path (adjust based on installation location)
-$pm2Path = "C:\Users\Administrator\AppData\Roaming\npm\pm2"
-
 # Remove existing posting_server directory if it exists
 if (Test-Path "posting_server") {
     Write-Host "🗑️  Removing existing posting_server directory..."
@@ -106,20 +103,20 @@ icacls "..\logs" /grant "Everyone:(OI)(CI)F" /Q
 
 # Start the server using PM2 with exponential backoff restart
 Write-Host "🚀 Starting posting server with PM2..."
-& $pm2Path start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
+pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
 
 # Save PM2 process list
 Write-Host "💾 Saving PM2 process list..."
-& $pm2Path save
+pm2 save
 
 # Go back to parent directory for task scheduler setup
 Set-Location ..
 
-# Setup PM2 to start on system boot (Windows approach)
+# Setup PM2 to start on system boot (Windows approach) - FIXED VERSION
 Write-Host "🔧 Setting up PM2 to start on system boot..."
 try {
     # Try the standard pm2 startup command first (will fail on Windows but we handle it)
-    $startupOutput = & $pm2Path startup 2>&1
+    $startupOutput = pm2 startup 2>&1
     if ($LASTEXITCODE -eq 0) {
         Write-Host "✅ PM2 startup script configured successfully."
     } else {
@@ -178,7 +175,6 @@ if (-not (Test-Path "posting_server")) {
 # Task details
 `$taskName = "PM2 Auto Start"
 `$taskDescription = "Automatically start PM2 processes on system boot"
-`$pm2Path = "C:\Users\Administrator\AppData\Roaming\npm\pm2"
 
 # Remove existing task if it exists
 try {
@@ -218,21 +214,21 @@ echo %DATE% %TIME% - Starting PM2 Auto Start >> logs\startup.log
 
 REM Try to resurrect saved processes
 echo Attempting to resurrect PM2 processes...
-call "$pm2Path" resurrect >> logs\startup.log 2>&1
+call pm2 resurrect >> logs\startup.log 2>&1
 
 REM Wait a moment and check if resurrection was successful
 timeout /t 5 /nobreak > nul
-call "$pm2Path" list | findstr "posting-server.*online" > nul
+call pm2 list | findstr "posting-server.*online" > nul
 
 if %ERRORLEVEL% NEQ 0 (
     echo PM2 resurrect failed or posting-server not found, starting manually...
     echo %DATE% %TIME% - PM2 resurrect failed, starting manually >> logs\startup.log
     
     REM Start the posting server manually
-    call "$pm2Path" start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
+    call pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
     
     REM Save the configuration
-    call "$pm2Path" save >> logs\startup.log 2>&1
+    call pm2 save >> logs\startup.log 2>&1
     
     echo %DATE% %TIME% - Manual start completed >> logs\startup.log
 ) else (
@@ -241,7 +237,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM Final status check
 echo Final PM2 status:
-call "$pm2Path" list >> logs\startup.log 2>&1
+call pm2 list >> logs\startup.log 2>&1
 
 echo %DATE% %TIME% - PM2 startup script completed >> logs\startup.log
 '@
@@ -330,21 +326,21 @@ echo %DATE% %TIME% - Starting PM2 Auto Start >> logs\startup.log
 
 REM Try to resurrect saved processes
 echo Attempting to resurrect PM2 processes...
-call "$pm2Path" resurrect >> logs\startup.log 2>&1
+call pm2 resurrect >> logs\startup.log 2>&1
 
 REM Wait a moment and check if resurrection was successful
 timeout /t 5 /nobreak > nul
-call "$pm2Path" list | findstr "posting-server.*online" > nul
+call pm2 list | findstr "posting-server.*online" > nul
 
 if %ERRORLEVEL% NEQ 0 (
     echo PM2 resurrect failed or posting-server not found, starting manually...
     echo %DATE% %TIME% - PM2 resurrect failed, starting manually >> logs\startup.log
     
     REM Start the posting server manually
-    call "$pm2Path" start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
+    call pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
     
     REM Save the configuration
-    call "$pm2Path" save >> logs\startup.log 2>&1
+    call pm2 save >> logs\startup.log 2>&1
     
     echo %DATE% %TIME% - Manual start completed >> logs\startup.log
 ) else (
@@ -353,7 +349,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM Final status check
 echo Final PM2 status:
-call "$pm2Path" list >> logs\startup.log 2>&1
+call pm2 list >> logs\startup.log 2>&1
 
 echo %DATE% %TIME% - PM2 startup script completed >> logs\startup.log
 "@
@@ -395,26 +391,26 @@ Set-Location posting_server
 
 # Verify if the server is running
 Write-Host "🔍 Verifying server status..."
-$pm2Status = & $pm2Path list | Select-String "posting-server.*online"
+$pm2Status = pm2 list | Select-String "posting-server.*online"
 if ($pm2Status) {
     Write-Host "✅ Posting server is running!"
 } else {
     Write-Host "⚠️ Posting server is not running. Attempting to restart..."
-    & $pm2Path restart posting-server
-    $pm2Status = & $pm2Path list | Select-String "posting-server.*online"
+    pm2 restart posting-server
+    $pm2Status = pm2 list | Select-String "posting-server.*online"
     if ($pm2Status) {
         Write-Host "✅ Posting server restarted successfully!"
     } else {
-        Write-Host "❌ Failed to start posting server. Please check logs with '& $pm2Path logs posting-server'."
+        Write-Host "❌ Failed to start posting server. Please check logs with 'pm2 logs posting-server'."
         exit 1
     }
 }
 
 # Optional: Install PM2 log rotation module
 Write-Host "🔧 Setting up PM2 log rotation..."
-& $pm2Path install pm2-logrotate
-& $pm2Path set pm2-logrotate:max_size 10M
-& $pm2Path set pm2-logrotate:compress true
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:compress true
 
 # Go back to parent directory for final output
 Set-Location ..
@@ -437,14 +433,14 @@ if (Test-Path "fix-pm2-task.ps1") {
 }
 Write-Host ""
 Write-Host "🔧 PM2 Management Commands:"
-Write-Host "   & $pm2Path status              # Check server status"
-Write-Host "   & $pm2Path logs                # View all logs"
-Write-Host "   & $pm2Path logs posting-server # View posting server logs"
-Write-Host "   & $pm2Path stop all           # Stop the server"
-Write-Host "   & $pm2Path restart all        # Restart the server"
-Write-Host "   & $pm2Path delete posting-server # Remove the server from PM2"
-Write-Host "   & $pm2Path save               # Save current process list"
-Write-Host "   & $pm2Path resurrect          # Restore saved processes"
+Write-Host "   pm2 status              # Check server status"
+Write-Host "   pm2 logs                # View all logs"
+Write-Host "   pm2 logs posting-server # View posting server logs"
+Write-Host "   pm2 stop all           # Stop the server"
+Write-Host "   pm2 restart all        # Restart the server"
+Write-Host "   pm2 delete posting-server # Remove the server from PM2"
+Write-Host "   pm2 save               # Save current process list"
+Write-Host "   pm2 resurrect          # Restore saved processes"
 Write-Host ""
 Write-Host "🚀 Auto-start Setup:"
 if (Test-Path "fix-pm2-task.ps1") {
