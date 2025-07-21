@@ -349,9 +349,12 @@ echo Current PATH: %PATH%
 echo %DATE% %TIME% - Current PATH: %PATH% >> logs\startup.log
 
 REM Find PM2 executable
+echo %DATE% %TIME% - Searching for PM2 executable... >> logs\startup.log
 set PM2_CMD=
 for %%p in (pm2.cmd pm2.bat pm2) do (
+    echo %DATE% %TIME% - Checking for %%p >> logs\startup.log
     for %%d in (%NPM_PATHS:;= %) do (
+        echo %DATE% %TIME% - Looking in: %%d >> logs\startup.log
         if exist "%%d\%%p" (
             set PM2_CMD=%%d\%%p
             echo Found PM2 at: %%d\%%p
@@ -362,6 +365,7 @@ for %%p in (pm2.cmd pm2.bat pm2) do (
 )
 
 REM Check for PM2 in PATH
+echo %DATE% %TIME% - Checking for PM2 in PATH... >> logs\startup.log
 for /f "tokens=*" %%i in ('where pm2 2^>nul') do (
     set PM2_CMD=%%i
     echo Found PM2 in PATH: %%i
@@ -371,7 +375,31 @@ for /f "tokens=*" %%i in ('where pm2 2^>nul') do (
 
 echo PM2 not found, attempting to install...
 echo %DATE% %TIME% - PM2 not found, attempting to install >> logs\startup.log
-call npm install -g pm2
+
+REM Try to find npm executable first
+set NPM_CMD=
+for %%d in (%NPM_PATHS:;= %) do (
+    if exist "%%d\npm.cmd" (
+        set NPM_CMD=%%d\npm.cmd
+        echo Found npm at: %%d\npm.cmd
+        echo %DATE% %TIME% - Found npm at: %%d\npm.cmd >> logs\startup.log
+        goto :npm_found
+    )
+)
+
+:npm_found
+if not defined NPM_CMD (
+    echo npm executable not found!
+    echo %DATE% %TIME% - npm executable not found! >> logs\startup.log
+    exit /b 1
+)
+
+echo Using npm: %NPM_CMD%
+echo %DATE% %TIME% - Using npm: %NPM_CMD% >> logs\startup.log
+
+REM Install PM2 using the full npm path
+echo %DATE% %TIME% - Running: %NPM_CMD% install -g pm2 >> logs\startup.log
+call "%NPM_CMD%" install -g pm2
 if %ERRORLEVEL% NEQ 0 (
     echo Failed to install PM2
     echo %DATE% %TIME% - Failed to install PM2 >> logs\startup.log
