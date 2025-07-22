@@ -112,7 +112,7 @@ pm2 save
 # Go back to parent directory for task scheduler setup
 Set-Location ..
 
-# Setup PM2 to start on system boot (Windows approach) - FIXED VERSION with Administrator path
+# Setup PM2 to start on system boot (Windows approach) - Updated for "Run whether user is logged on or not"
 Write-Host "🔧 Setting up PM2 to start on system boot..."
 try {
     # Try the standard pm2 startup command first (will fail on Windows but we handle it)
@@ -263,15 +263,15 @@ Set-Content -Path `$batchFilePath -Value `$batchContent -Encoding ASCII
 Write-Host "✅ Created startup batch file at: `$batchFilePath"
 
 try {
-    # Create the scheduled task with Administrator working directory
+    # Create the scheduled task with Administrator working directory and "Run whether user is logged on or not"
     `$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c ```"`$batchFilePath```"" -WorkingDirectory `$administratorDir
     
     # Set trigger with delay
     `$trigger = New-ScheduledTaskTrigger -AtStartup
     `$trigger.Delay = "PT3M"  # 3 minute delay
     
-    # Set principal - using Administrator user instead of SYSTEM
-    `$principal = New-ScheduledTaskPrincipal -UserId "Administrator" -LogonType ServiceAccount -RunLevel Highest
+    # Set principal to run whether user is logged on or not with highest privileges
+    `$principal = New-ScheduledTaskPrincipal -UserId "Administrator" -LogonType Password -RunLevel Highest
     
     # Configure settings
     `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
@@ -281,7 +281,7 @@ try {
     Register-ScheduledTask -TaskName `$taskName -InputObject `$task | Out-Null
     
     Write-Host "✅ Successfully created '`$taskName' scheduled task!"
-    Write-Host "📋 Task will run at startup with 3-minute delay using Administrator account"
+    Write-Host "📋 Task will run at startup with 3-minute delay whether user is logged on or not"
     Write-Host "📂 Working directory set to: `$administratorDir"
     Write-Host "🧪 Test the task: Right-click 'PM2 Auto Start' in Task Scheduler and select 'Run'"
     Write-Host "📊 Check logs at: `$(Join-Path `$currentDir 'logs\startup.log')"
@@ -399,8 +399,8 @@ echo %DATE% %TIME% - PM2 startup script completed >> logs\startup.log
             $trigger = New-ScheduledTaskTrigger -AtStartup
             $trigger.Delay = "PT3M"  # 3 minute delay
             
-            # Set principal to run with highest privileges as Administrator user
-            $principal = New-ScheduledTaskPrincipal -UserId "Administrator" -LogonType ServiceAccount -RunLevel Highest
+            # Set principal to run whether user is logged on or not with highest privileges
+            $principal = New-ScheduledTaskPrincipal -UserId "Administrator" -LogonType Password -RunLevel Highest
             
             # Configure settings for maximum reliability
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
@@ -410,7 +410,7 @@ echo %DATE% %TIME% - PM2 startup script completed >> logs\startup.log
             Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
             
             Write-Host "✅ Successfully created '$taskName' scheduled task!"
-            Write-Host "📋 Task configured to run at startup with 3-minute delay using Administrator account"
+            Write-Host "📋 Task configured to run at startup with 3-minute delay whether user is logged on or not"
             Write-Host "📂 Working directory set to: $administratorDir"
             Write-Host "🧪 Test the task manually: Right-click 'PM2 Auto Start' in Task Scheduler and select 'Run'"
             Write-Host "📊 Startup logs will be written to: $(Join-Path $currentDir 'logs\startup.log')"
@@ -482,7 +482,7 @@ Write-Host "🚀 Auto-start Setup:"
 if (Test-Path "fix-pm2-task.ps1") {
     Write-Host "   Run as Administrator: .\fix-pm2-task.ps1"
 } else {
-    Write-Host "   Task Scheduler configured - server will start automatically on boot"
+    Write-Host "   Task Scheduler configured - server will start automatically on boot whether user is logged on or not"
 }
 Write-Host "   Startup logs: .\logs\startup.log"
 Write-Host "   Working directory: C:\Users\Administrator"
