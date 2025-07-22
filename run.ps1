@@ -55,32 +55,9 @@ if (-not (Command-Exists git)) {
     Install-Git
 }
 
-# Enhanced PM2 installation with global-style for system-wide access
-Write-Host "🔧 Installing PM2 globally for all users (including SYSTEM account)..." -ForegroundColor Green
-try {
-    # Install PM2 globally with global-style flag for system-wide access
-    npm install -g pm2 --global-style --silent
-    
-    # Verify PM2 installation
-    $pm2Version = npm list -g pm2 --depth=0 2>$null
-    if ($pm2Version -match "pm2@") {
-        Write-Host "✅ PM2 installed globally successfully!" -ForegroundColor Green
-    } else {
-        throw "PM2 installation verification failed"
-    }
-    
-    # Get the global npm modules path
-    $globalNodeModules = npm root -g 2>$null
-    $globalNpmBin = npm bin -g 2>$null
-    
-    Write-Host "📍 Global PM2 installed at: $globalNpmBin" -ForegroundColor Cyan
-    
-    # Set environment variable for current session
-    $env:PATH += ";$globalNpmBin"
-    
-} catch {
-    Write-Host "❌ Failed to install PM2 globally: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "⚠️  Falling back to user-specific installation..." -ForegroundColor Yellow
+# Check if PM2 is installed, if not install it globally
+if (-not (Command-Exists pm2)) {
+    Write-Host "📦 Installing PM2 globally..."
     npm install -g pm2
 }
 
@@ -135,7 +112,7 @@ pm2 save
 # Go back to parent directory for task scheduler setup
 Set-Location ..
 
-# Setup PM2 to start on system boot (Windows approach) - ENHANCED VERSION
+# Setup PM2 to start on system boot (Windows approach) - FIXED VERSION with Administrator path
 Write-Host "🔧 Setting up PM2 to start on system boot..."
 try {
     # Try the standard pm2 startup command first (will fail on Windows but we handle it)
@@ -166,10 +143,10 @@ try {
         Write-Host "      - Action: 'Start a program'"
         Write-Host "      - Program: 'cmd.exe'"
         Write-Host "      - Arguments: '/c `"$(Join-Path (Get-Location) 'pm2-startup.bat')`"'"
-        Write-Host "      - Start in: '$(Get-Location)'"
+        Write-Host "      - Start in: 'C:\Users\Administrator'"
         Write-Host "      - Check 'Run with highest privileges'"
         
-        # Create the enhanced helper script for later use
+        # Create the helper script for later use
         $helperScriptContent = @"
 # Helper script to fix PM2 Task Scheduler - Run as Administrator
 # Exit on error
@@ -184,9 +161,19 @@ if (-not `$isAdmin) {
     exit 1
 }
 
-Write-Host "🔧 Setting up PM2 Task Scheduler with enhanced global path support..."
+Write-Host "🔧 Setting up PM2 Task Scheduler with Administrator path..."
 
-# Get current directory
+# Use fixed Administrator path
+`$administratorDir = "C:\Users\Administrator"
+
+# Verify the Administrator directory exists
+if (-not (Test-Path `$administratorDir)) {
+    Write-Host "❌ Administrator directory not found at: `$administratorDir"
+    Write-Host "Please verify the correct Administrator user directory path."
+    exit 1
+}
+
+# Get current directory for posting_server
 `$currentDir = Get-Location
 
 # Verify posting_server directory exists
@@ -197,7 +184,7 @@ if (-not (Test-Path "posting_server")) {
 
 # Task details
 `$taskName = "PM2 Auto Start"
-`$taskDescription = "Automatically start PM2 processes on system boot with global path support"
+`$taskDescription = "Automatically start PM2 processes on system boot"
 
 # Remove existing task if it exists
 try {
@@ -210,161 +197,81 @@ try {
     Write-Host "ℹ️ No existing task found to remove."
 }
 
-# Create enhanced startup batch file with robust PM2 path detection
+# Create startup batch file
 `$batchFilePath = Join-Path `$currentDir "pm2-startup.bat"
 `$batchContent = @'
 @echo off
-setlocal enabledelayedexpansion
+echo Starting PM2 Auto Start script...
+echo Current directory: %CD%
+echo Target directory: $currentDir
+echo Administrator directory: $administratorDir
 
-REM Set log file location
-set LOG_FILE=logs\startup.log
+REM Change to the Administrator directory first
+cd /d "$administratorDir"
+echo Changed to Administrator directory: %CD%
+
+REM Set NODE_PATH and npm configuration for Administrator user
+set NODE_PATH=$administratorDir\AppData\Roaming\npm\node_modules
+call npm config set prefix $administratorDir\AppData\Roaming\npm
+
+REM Add npm global bin to PATH for Administrator user
+set PATH=$administratorDir\AppData\Roaming\npm;%PATH%
+
+REM Change to the project directory
+cd /d "$currentDir"
+echo Changed to project directory: %CD%
 
 REM Create logs directory if it doesn't exist
-if not exist "logs" mkdir "logs"
+if not exist "logs" mkdir logs
 
-echo %DATE% %TIME% - Starting PM2 Auto Start >> "%LOG_FILE%"
+REM Log the attempt
+echo %DATE% %TIME% - Starting PM2 Auto Start from Administrator profile >> logs\startup.log
+echo %DATE% %TIME% - Working directory: %CD% >> logs\startup.log
+echo %DATE% %TIME% - Node path: %NODE_PATH% >> logs\startup.log
 
-REM Change to the correct directory
-cd /d "$currentDir"
-echo %DATE% %TIME% - Changed to directory: %CD% >> "%LOG_FILE%"
+REM Try to resurrect saved processes
+echo Attempting to resurrect PM2 processes...
+call pm2 resurrect >> logs\startup.log 2>&1
 
-REM Add multiple potential npm paths to ensure PM2 is found
-set PATH=%PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm;%ProgramFiles%\nodejs\node_modules\.bin
+REM Wait a moment and check if resurrection was successful
+timeout /t 5 /nobreak > nul
+call pm2 list | findstr "posting-server.*online" > nul
 
-REM Also try common global installation paths
-set PATH=%PATH%;C:\Users\Administrator\AppData\Roaming\npm
-set PATH=%PATH%;%ALLUSERSPROFILE%\npm
-set PATH=%PATH%;%ProgramData%\npm
-
-REM Set NODE_PATH for module resolution
-set NODE_PATH=%APPDATA%\npm\node_modules;%ProgramFiles%\nodejs\node_modules
-
-REM Set HOMEPATH for PM2 to ensure proper configuration directory under SYSTEM account
-set HOMEPATH=C:\Users\Administrator
-set PM2_HOME=C:\Users\Administrator\.pm2
-if not exist "%PM2_HOME%" (
-    echo %DATE% %TIME% - Creating PM2 home directory at %PM2_HOME% >> "%LOG_FILE%"
-    mkdir "%PM2_HOME%"
-    if !ERRORLEVEL! neq 0 (
-        echo %DATE% %TIME% - ERROR: Failed to create PM2 home directory >> "%LOG_FILE%"
-        goto :end
-    )
-)
-
-echo %DATE% %TIME% - Updated PATH: %PATH% >> "%LOG_FILE%"
-echo %DATE% %TIME% - HOMEPATH set to: %HOMEPATH% >> "%LOG_FILE%"
-echo %DATE% %TIME% - PM2_HOME set to: %PM2_HOME% >> "%LOG_FILE%"
-
-REM Try to find PM2 executable in multiple ways
-set PM2_CMD=
-echo %DATE% %TIME% - Searching for PM2 executable... >> "%LOG_FILE%"
-
-REM Method 1: Try standard where command
-for %%i in (pm2.cmd pm2 pm2.exe) do (
-    where %%i >nul 2>&1
-    if !ERRORLEVEL! == 0 (
-        set PM2_CMD=%%i
-        echo %DATE% %TIME% - Found PM2 using where: %%i >> "%LOG_FILE%"
-        goto :found_pm2
-    )
-)
-
-REM Method 2: Try common installation paths
-set SEARCH_PATHS=%APPDATA%\npm\pm2.cmd;C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd;%ProgramFiles%\nodejs\pm2.cmd;%ProgramFiles%\nodejs\node_modules\.bin\pm2.cmd;%ProgramData%\npm\pm2.cmd
-
-for %%p in (%SEARCH_PATHS%) do (
-    if exist "%%p" (
-        set PM2_CMD=%%p
-        echo %DATE% %TIME% - Found PM2 at: %%p >> "%LOG_FILE%"
-        goto :found_pm2
-    )
-)
-
-REM Method 3: Try using npm to find global bin directory
-for /f "tokens=*" %%i in ('npm bin -g 2^>nul') do (
-    if exist "%%i\pm2.cmd" (
-        set PM2_CMD=%%i\pm2.cmd
-        echo %DATE% %TIME% - Found PM2 using npm bin -g: %%i\pm2.cmd >> "%LOG_FILE%"
-        goto :found_pm2
-    )
-)
-
-:found_pm2
-if not defined PM2_CMD (
-    echo %DATE% %TIME% - ERROR: PM2 not found in any expected location >> "%LOG_FILE%"
-    echo %DATE% %TIME% - Searched paths: %SEARCH_PATHS% >> "%LOG_FILE%"
-    goto :end
-)
-
-echo %DATE% %TIME% - Using PM2 at: !PM2_CMD! >> "%LOG_FILE%"
-
-REM Test PM2 command
-"!PM2_CMD!" --version >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - ERROR: PM2 command test failed >> "%LOG_FILE%"
-    goto :end
-)
-
-REM Verify PM2 home directory is accessible
-dir "%PM2_HOME%" >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - ERROR: PM2 home directory %PM2_HOME% is not accessible >> "%LOG_FILE%"
-    goto :end
-)
-
-REM Try to resurrect saved processes first
-echo %DATE% %TIME% - Attempting PM2 resurrect >> "%LOG_FILE%"
-"!PM2_CMD!" resurrect >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - WARNING: PM2 resurrect failed, proceeding to manual start >> "%LOG_FILE%"
-)
-
-REM Wait a moment for processes to start
-timeout /t 10 /nobreak > nul
-
-REM Check if posting-server is running
-"!PM2_CMD!" list | findstr "posting-server" | findstr "online" >nul 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - Posting server not running, starting manually >> "%LOG_FILE%"
-    "!PM2_CMD!" start "posting_server\server.js" --name "posting-server" --log "logs\posting-server.log" --exp-backoff-restart-delay=100 >> "%LOG_FILE%" 2>&1
-    if !ERRORLEVEL! == 0 (
-        echo %DATE% %TIME% - Posting server started successfully >> "%LOG_FILE%"
-    ) else (
-        echo %DATE% %TIME% - ERROR: Failed to start posting server >> "%LOG_FILE%"
-        goto :end
-    )
+if %ERRORLEVEL% NEQ 0 (
+    echo PM2 resurrect failed or posting-server not found, starting manually...
+    echo %DATE% %TIME% - PM2 resurrect failed, starting manually >> logs\startup.log
+    
+    REM Start the posting server manually
+    call pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
+    
+    REM Save the configuration
+    call pm2 save >> logs\startup.log 2>&1
+    
+    echo %DATE% %TIME% - Manual start completed >> logs\startup.log
 ) else (
-    echo %DATE% %TIME% - Posting server is already running >> "%LOG_FILE%"
+    echo %DATE% %TIME% - PM2 resurrect successful >> logs\startup.log
 )
 
-REM Save the current process list
-echo %DATE% %TIME% - Saving PM2 process list >> "%LOG_FILE%"
-"!PM2_CMD!" save >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - WARNING: Failed to save PM2 process list >> "%LOG_FILE%"
-)
+REM Final status check
+echo Final PM2 status:
+call pm2 list >> logs\startup.log 2>&1
 
-REM Show final status
-echo %DATE% %TIME% - Final PM2 status: >> "%LOG_FILE%"
-"!PM2_CMD!" status >> "%LOG_FILE%" 2>&1
-
-:end
-echo %DATE% %TIME% - PM2 startup script completed >> "%LOG_FILE%"
+echo %DATE% %TIME% - PM2 startup script completed >> logs\startup.log
 '@
 
 Set-Content -Path `$batchFilePath -Value `$batchContent -Encoding ASCII
-Write-Host "✅ Created enhanced startup batch file at: `$batchFilePath"
+Write-Host "✅ Created startup batch file at: `$batchFilePath"
 
 try {
-    # Create the scheduled task
-    `$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c ```"`$batchFilePath```"" -WorkingDirectory `$currentDir
+    # Create the scheduled task with Administrator working directory
+    `$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c ```"`$batchFilePath```"" -WorkingDirectory `$administratorDir
     
     # Set trigger with delay
     `$trigger = New-ScheduledTaskTrigger -AtStartup
     `$trigger.Delay = "PT3M"  # 3 minute delay
     
-    # Set principal - using SYSTEM for better reliability
-    `$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    # Set principal - using Administrator user instead of SYSTEM
+    `$principal = New-ScheduledTaskPrincipal -UserId "Administrator" -LogonType ServiceAccount -RunLevel Highest
     
     # Configure settings
     `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
@@ -374,29 +281,40 @@ try {
     Register-ScheduledTask -TaskName `$taskName -InputObject `$task | Out-Null
     
     Write-Host "✅ Successfully created '`$taskName' scheduled task!"
-    Write-Host "📋 Task configured to run at startup with 3-minute delay using SYSTEM account"
+    Write-Host "📋 Task will run at startup with 3-minute delay using Administrator account"
+    Write-Host "📂 Working directory set to: `$administratorDir"
     Write-Host "🧪 Test the task: Right-click 'PM2 Auto Start' in Task Scheduler and select 'Run'"
-    Write-Host "📊 Startup logs will be written to: `$(Join-Path `$currentDir 'logs\startup.log')"
+    Write-Host "📊 Check logs at: `$(Join-Path `$currentDir 'logs\startup.log')"
     
 } catch {
     Write-Host "❌ Failed to create scheduled task: `$(`$_.Exception.Message)" -ForegroundColor Red
 }
 
-Write-Host "✅ PM2 Task Scheduler setup completed with enhanced path detection!"
+Write-Host "✅ PM2 Task Scheduler setup completed with Administrator path!"
 "@
         
         Set-Content -Path "fix-pm2-task.ps1" -Value $helperScriptContent -Encoding UTF8
-        Write-Host "💾 Created enhanced helper script: fix-pm2-task.ps1"
+        Write-Host "💾 Created helper script: fix-pm2-task.ps1"
         
     } else {
-        # Running as Administrator - proceed with enhanced task creation
+        # Running as Administrator - proceed with task creation using Administrator path
         try {
-            # Get current directory
+            # Use fixed Administrator path
+            $administratorDir = "C:\Users\Administrator"
+            
+            # Verify the Administrator directory exists
+            if (-not (Test-Path $administratorDir)) {
+                Write-Host "❌ Administrator directory not found at: $administratorDir"
+                Write-Host "Please verify the correct Administrator user directory path."
+                throw "Administrator directory not found"
+            }
+            
+            # Get current directory for posting_server
             $currentDir = Get-Location
             
             # Task details
             $taskName = "PM2 Auto Start"
-            $taskDescription = "Automatically start PM2 processes on system boot with global path support"
+            $taskDescription = "Automatically start PM2 processes on system boot"
             
             # Remove existing task if it exists
             try {
@@ -409,160 +327,80 @@ Write-Host "✅ PM2 Task Scheduler setup completed with enhanced path detection!
                 # Task doesn't exist, continue
             }
             
-            # Create enhanced batch file for PM2 startup with robust path detection
+            # Create a robust batch file for PM2 startup with Administrator path
             $batchFilePath = Join-Path $currentDir "pm2-startup.bat"
             $batchContent = @"
 @echo off
-setlocal enabledelayedexpansion
+echo Starting PM2 Auto Start script...
+echo Current directory: %CD%
+echo Target directory: $currentDir
+echo Administrator directory: $administratorDir
 
-REM Set log file location
-set LOG_FILE=logs\startup.log
+REM Change to the Administrator directory first
+cd /d "$administratorDir"
+echo Changed to Administrator directory: %CD%
+
+REM Set NODE_PATH and npm configuration for Administrator user
+set NODE_PATH=$administratorDir\AppData\Roaming\npm\node_modules
+call npm config set prefix $administratorDir\AppData\Roaming\npm
+
+REM Add npm global bin to PATH for Administrator user
+set PATH=$administratorDir\AppData\Roaming\npm;%PATH%
+
+REM Change to the project directory
+cd /d "$currentDir"
+echo Changed to project directory: %CD%
 
 REM Create logs directory if it doesn't exist
-if not exist "logs" mkdir "logs"
+if not exist "logs" mkdir logs
 
-echo %DATE% %TIME% - Starting PM2 Auto Start >> "%LOG_FILE%"
+REM Log the attempt
+echo %DATE% %TIME% - Starting PM2 Auto Start from Administrator profile >> logs\startup.log
+echo %DATE% %TIME% - Working directory: %CD% >> logs\startup.log
+echo %DATE% %TIME% - Node path: %NODE_PATH% >> logs\startup.log
 
-REM Change to the correct directory
-cd /d "$currentDir"
-echo %DATE% %TIME% - Changed to directory: %CD% >> "%LOG_FILE%"
+REM Try to resurrect saved processes
+echo Attempting to resurrect PM2 processes...
+call pm2 resurrect >> logs\startup.log 2>&1
 
-REM Add multiple potential npm paths to ensure PM2 is found
-set PATH=%PATH%;%ProgramFiles%\nodejs;%APPDATA%\npm;%ProgramFiles%\nodejs\node_modules\.bin
+REM Wait a moment and check if resurrection was successful
+timeout /t 5 /nobreak > nul
+call pm2 list | findstr "posting-server.*online" > nul
 
-REM Also try common global installation paths
-set PATH=%PATH%;C:\Users\Administrator\AppData\Roaming\npm
-set PATH=%PATH%;%ALLUSERSPROFILE%\npm
-set PATH=%PATH%;%ProgramData%\npm
-
-REM Set NODE_PATH for module resolution
-set NODE_PATH=%APPDATA%\npm\node_modules;%ProgramFiles%\nodejs\node_modules
-
-REM Set HOMEPATH for PM2 to ensure proper configuration directory under SYSTEM account
-set HOMEPATH=C:\Users\Administrator
-set PM2_HOME=C:\Users\Administrator\.pm2
-if not exist "%PM2_HOME%" (
-    echo %DATE% %TIME% - Creating PM2 home directory at %PM2_HOME% >> "%LOG_FILE%"
-    mkdir "%PM2_HOME%"
-    if !ERRORLEVEL! neq 0 (
-        echo %DATE% %TIME% - ERROR: Failed to create PM2 home directory >> "%LOG_FILE%"
-        goto :end
-    )
-)
-
-echo %DATE% %TIME% - Updated PATH: %PATH% >> "%LOG_FILE%"
-echo %DATE% %TIME% - HOMEPATH set to: %HOMEPATH% >> "%LOG_FILE%"
-echo %DATE% %TIME% - PM2_HOME set to: %PM2_HOME% >> "%LOG_FILE%"
-
-REM Try to find PM2 executable in multiple ways
-set PM2_CMD=
-echo %DATE% %TIME% - Searching for PM2 executable... >> "%LOG_FILE%"
-
-REM Method 1: Try standard where command
-for %%i in (pm2.cmd pm2 pm2.exe) do (
-    where %%i >nul 2>&1
-    if !ERRORLEVEL! == 0 (
-        set PM2_CMD=%%i
-        echo %DATE% %TIME% - Found PM2 using where: %%i >> "%LOG_FILE%"
-        goto :found_pm2
-    )
-)
-
-REM Method 2: Try common installation paths
-set SEARCH_PATHS=%APPDATA%\npm\pm2.cmd;C:\Users\Administrator\AppData\Roaming\npm\pm2.cmd;%ProgramFiles%\nodejs\pm2.cmd;%ProgramFiles%\nodejs\node_modules\.bin\pm2.cmd;%ProgramData%\npm\pm2.cmd
-
-for %%p in (%SEARCH_PATHS%) do (
-    if exist "%%p" (
-        set PM2_CMD=%%p
-        echo %DATE% %TIME% - Found PM2 at: %%p >> "%LOG_FILE%"
-        goto :found_pm2
-    )
-)
-
-REM Method 3: Try using npm to find global bin directory
-for /f "tokens=*" %%i in ('npm bin -g 2^>nul') do (
-    if exist "%%i\pm2.cmd" (
-        set PM2_CMD=%%i\pm2.cmd
-        echo %DATE% %TIME% - Found PM2 using npm bin -g: %%i\pm2.cmd >> "%LOG_FILE%"
-        goto :found_pm2
-    )
-)
-
-:found_pm2
-if not defined PM2_CMD (
-    echo %DATE% %TIME% - ERROR: PM2 not found in any expected location >> "%LOG_FILE%"
-    echo %DATE% %TIME% - Searched paths: %SEARCH_PATHS% >> "%LOG_FILE%"
-    goto :end
-)
-
-echo %DATE% %TIME% - Using PM2 at: !PM2_CMD! >> "%LOG_FILE%"
-
-REM Test PM2 command
-"!PM2_CMD!" --version >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - ERROR: PM2 command test failed >> "%LOG_FILE%"
-    goto :end
-)
-
-REM Verify PM2 home directory is accessible
-dir "%PM2_HOME%" >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - ERROR: PM2 home directory %PM2_HOME% is not accessible >> "%LOG_FILE%"
-    goto :end
-)
-
-REM Try to resurrect saved processes first
-echo %DATE% %TIME% - Attempting PM2 resurrect >> "%LOG_FILE%"
-"!PM2_CMD!" resurrect >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - WARNING: PM2 resurrect failed, proceeding to manual start >> "%LOG_FILE%"
-)
-
-REM Wait a moment for processes to start
-timeout /t 10 /nobreak > nul
-
-REM Check if posting-server is running
-"!PM2_CMD!" list | findstr "posting-server" | findstr "online" >nul 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - Posting server not running, starting manually >> "%LOG_FILE%"
-    "!PM2_CMD!" start "posting_server\server.js" --name "posting-server" --log "logs\posting-server.log" --exp-backoff-restart-delay=100 >> "%LOG_FILE%" 2>&1
-    if !ERRORLEVEL! == 0 (
-        echo %DATE% %TIME% - Posting server started successfully >> "%LOG_FILE%"
-    ) else (
-        echo %DATE% %TIME% - ERROR: Failed to start posting server >> "%LOG_FILE%"
-        goto :end
-    )
+if %ERRORLEVEL% NEQ 0 (
+    echo PM2 resurrect failed or posting-server not found, starting manually...
+    echo %DATE% %TIME% - PM2 resurrect failed, starting manually >> logs\startup.log
+    
+    REM Start the posting server manually
+    call pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
+    
+    REM Save the configuration
+    call pm2 save >> logs\startup.log 2>&1
+    
+    echo %DATE% %TIME% - Manual start completed >> logs\startup.log
 ) else (
-    echo %DATE% %TIME% - Posting server is already running >> "%LOG_FILE%"
+    echo %DATE% %TIME% - PM2 resurrect successful >> logs\startup.log
 )
 
-REM Save the current process list
-echo %DATE% %TIME% - Saving PM2 process list >> "%LOG_FILE%"
-"!PM2_CMD!" save >> "%LOG_FILE%" 2>&1
-if !ERRORLEVEL! neq 0 (
-    echo %DATE% %TIME% - WARNING: Failed to save PM2 process list >> "%LOG_FILE%"
-)
+REM Final status check
+echo Final PM2 status:
+call pm2 list >> logs\startup.log 2>&1
 
-REM Show final status
-echo %DATE% %TIME% - Final PM2 status: >> "%LOG_FILE%"
-"!PM2_CMD!" status >> "%LOG_FILE%" 2>&1
-
-:end
-echo %DATE% %TIME% - PM2 startup script completed >> "%LOG_FILE%"
+echo %DATE% %TIME% - PM2 startup script completed >> logs\startup.log
 "@
             
             Set-Content -Path $batchFilePath -Value $batchContent -Encoding ASCII
-            Write-Host "✅ Created enhanced startup batch file at: $batchFilePath"
+            Write-Host "✅ Created startup batch file at: $batchFilePath"
             
-            # Create the scheduled task using cmd.exe to run the batch file
-            $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$batchFilePath`"" -WorkingDirectory $currentDir
+            # Create the scheduled task using cmd.exe to run the batch file with Administrator working directory
+            $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$batchFilePath`"" -WorkingDirectory $administratorDir
             
             # Set trigger to run at startup with a 3-minute delay
             $trigger = New-ScheduledTaskTrigger -AtStartup
             $trigger.Delay = "PT3M"  # 3 minute delay
             
-            # Set principal to run with highest privileges as SYSTEM
-            $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+            # Set principal to run with highest privileges as Administrator user
+            $principal = New-ScheduledTaskPrincipal -UserId "Administrator" -LogonType ServiceAccount -RunLevel Highest
             
             # Configure settings for maximum reliability
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
@@ -571,8 +409,9 @@ echo %DATE% %TIME% - PM2 startup script completed >> "%LOG_FILE%"
             $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description $taskDescription
             Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
             
-            Write-Host "✅ Successfully created '$taskName' scheduled task with enhanced path detection!"
-            Write-Host "📋 Task configured to run at startup with 3-minute delay using SYSTEM account"
+            Write-Host "✅ Successfully created '$taskName' scheduled task!"
+            Write-Host "📋 Task configured to run at startup with 3-minute delay using Administrator account"
+            Write-Host "📂 Working directory set to: $administratorDir"
             Write-Host "🧪 Test the task manually: Right-click 'PM2 Auto Start' in Task Scheduler and select 'Run'"
             Write-Host "📊 Startup logs will be written to: $(Join-Path $currentDir 'logs\startup.log')"
             
@@ -605,30 +444,15 @@ if ($pm2Status) {
 
 # Optional: Install PM2 log rotation module
 Write-Host "🔧 Setting up PM2 log rotation..."
-try {
-    pm2 install pm2-logrotate
-    pm2 set pm2-logrotate:max_size 10M
-    pm2 set pm2-logrotate:retain 30
-    pm2 set pm2-logrotate:compress true
-    pm2 set pm2-logrotate:dateFormat YYYY-MM-DD_HH-mm-ss
-    pm2 set pm2-logrotate:workerInterval 30
-    pm2 set pm2-logrotate:rotateInterval "0 0 * * *"
-    pm2 set pm2-logrotate:rotateModule true
-    Write-Host "✅ PM2 log rotation configured successfully!"
-} catch {
-    Write-Host "⚠️ PM2 log rotation setup failed, but server is still running."
-}
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:compress true
 
 # Go back to parent directory for final output
 Set-Location ..
 
 Write-Host ""
-Write-Host "✅ Server setup completed successfully with enhanced global PM2 support!"
-Write-Host "🔧 PM2 Installation Details:"
-Write-Host "   - PM2 installed globally with --global-style flag"
-Write-Host "   - System-wide access enabled for SYSTEM account"
-Write-Host "   - Enhanced path detection in startup scripts"
-Write-Host ""
+Write-Host "✅ Server setup completed successfully!"
 Write-Host "📁 Downloaded complete posting server with all folders:"
 Write-Host "   - config/"
 Write-Host "   - models/"
@@ -639,9 +463,9 @@ Write-Host ""
 Write-Host "📋 Files created in this directory:"
 Write-Host "   - posting_server/ (main server directory)"
 Write-Host "   - logs/ (log files)"
-Write-Host "   - pm2-startup.bat (enhanced startup script)"
+Write-Host "   - pm2-startup.bat (startup script)"
 if (Test-Path "fix-pm2-task.ps1") {
-    Write-Host "   - fix-pm2-task.ps1 (enhanced helper script for admin setup)"
+    Write-Host "   - fix-pm2-task.ps1 (helper script for admin setup)"
 }
 Write-Host ""
 Write-Host "🔧 PM2 Management Commands:"
@@ -661,13 +485,9 @@ if (Test-Path "fix-pm2-task.ps1") {
     Write-Host "   Task Scheduler configured - server will start automatically on boot"
 }
 Write-Host "   Startup logs: .\logs\startup.log"
+Write-Host "   Working directory: C:\Users\Administrator"
 Write-Host ""
 Write-Host "🧪 Testing:"
 Write-Host "   - Restart your computer to test auto-start"
 Write-Host "   - Or manually run the task in Task Scheduler"
 Write-Host "   - Check .\logs\startup.log for startup details"
-Write-Host ""
-Write-Host "🔍 Troubleshooting:"
-Write-Host "   - If PM2 is not found, check: npm bin -g"
-Write-Host "   - Verify global installation: npm list -g pm2"
-Write-Host "   - Check PATH includes: $(npm bin -g 2>$null)"
