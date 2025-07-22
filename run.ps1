@@ -240,11 +240,11 @@ REM Set NODE_PATH for module resolution
 set NODE_PATH=%APPDATA%\npm\node_modules;%ProgramFiles%\nodejs\node_modules
 
 REM Set HOMEPATH for PM2 to ensure proper configuration directory under SYSTEM account
-set HOMEPATH=%ProgramData%\pm2
-set PM2_HOME=%ProgramData%\pm2
-if not exist "%ProgramData%\pm2" (
-    echo %DATE% %TIME% - Creating PM2 home directory at %ProgramData%\pm2 >> "%LOG_FILE%"
-    mkdir "%ProgramData%\pm2"
+set HOMEPATH=C:\Users\Administrator
+set PM2_HOME=C:\Users\Administrator\.pm2
+if not exist "%PM2_HOME%" (
+    echo %DATE% %TIME% - Creating PM2 home directory at %PM2_HOME% >> "%LOG_FILE%"
+    mkdir "%PM2_HOME%"
     if !ERRORLEVEL! neq 0 (
         echo %DATE% %TIME% - ERROR: Failed to create PM2 home directory >> "%LOG_FILE%"
         goto :end
@@ -439,11 +439,11 @@ REM Set NODE_PATH for module resolution
 set NODE_PATH=%APPDATA%\npm\node_modules;%ProgramFiles%\nodejs\node_modules
 
 REM Set HOMEPATH for PM2 to ensure proper configuration directory under SYSTEM account
-set HOMEPATH=%ProgramData%\pm2
-set PM2_HOME=%ProgramData%\pm2
-if not exist "%ProgramData%\pm2" (
-    echo %DATE% %TIME% - Creating PM2 home directory at %ProgramData%\pm2 >> "%LOG_FILE%"
-    mkdir "%ProgramData%\pm2"
+set HOMEPATH=C:\Users\Administrator
+set PM2_HOME=C:\Users\Administrator\.pm2
+if not exist "%PM2_HOME%" (
+    echo %DATE% %TIME% - Creating PM2 home directory at %PM2_HOME% >> "%LOG_FILE%"
+    mkdir "%PM2_HOME%"
     if !ERRORLEVEL! neq 0 (
         echo %DATE% %TIME% - ERROR: Failed to create PM2 home directory >> "%LOG_FILE%"
         goto :end
