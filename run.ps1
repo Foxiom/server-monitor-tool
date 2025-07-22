@@ -239,7 +239,21 @@ set PATH=%PATH%;%ProgramData%\npm
 REM Set NODE_PATH for module resolution
 set NODE_PATH=%APPDATA%\npm\node_modules;%ProgramFiles%\nodejs\node_modules
 
+REM Set HOMEPATH for PM2 to ensure proper configuration directory under SYSTEM account
+set HOMEPATH=%ProgramData%\pm2
+set PM2_HOME=%ProgramData%\pm2
+if not exist "%ProgramData%\pm2" (
+    echo %DATE% %TIME% - Creating PM2 home directory at %ProgramData%\pm2 >> "%LOG_FILE%"
+    mkdir "%ProgramData%\pm2"
+    if !ERRORLEVEL! neq 0 (
+        echo %DATE% %TIME% - ERROR: Failed to create PM2 home directory >> "%LOG_FILE%"
+        goto :end
+    )
+)
+
 echo %DATE% %TIME% - Updated PATH: %PATH% >> "%LOG_FILE%"
+echo %DATE% %TIME% - HOMEPATH set to: %HOMEPATH% >> "%LOG_FILE%"
+echo %DATE% %TIME% - PM2_HOME set to: %PM2_HOME% >> "%LOG_FILE%"
 
 REM Try to find PM2 executable in multiple ways
 set PM2_CMD=
@@ -291,9 +305,19 @@ if !ERRORLEVEL! neq 0 (
     goto :end
 )
 
+REM Verify PM2 home directory is accessible
+dir "%PM2_HOME%" >> "%LOG_FILE%" 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo %DATE% %TIME% - ERROR: PM2 home directory %PM2_HOME% is not accessible >> "%LOG_FILE%"
+    goto :end
+)
+
 REM Try to resurrect saved processes first
 echo %DATE% %TIME% - Attempting PM2 resurrect >> "%LOG_FILE%"
 "!PM2_CMD!" resurrect >> "%LOG_FILE%" 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo %DATE% %TIME% - WARNING: PM2 resurrect failed, proceeding to manual start >> "%LOG_FILE%"
+)
 
 REM Wait a moment for processes to start
 timeout /t 10 /nobreak > nul
@@ -306,7 +330,8 @@ if !ERRORLEVEL! neq 0 (
     if !ERRORLEVEL! == 0 (
         echo %DATE% %TIME% - Posting server started successfully >> "%LOG_FILE%"
     ) else (
-        echo %DATE% %TIME% - Failed to start posting server >> "%LOG_FILE%"
+        echo %DATE% %TIME% - ERROR: Failed to start posting server >> "%LOG_FILE%"
+        goto :end
     )
 ) else (
     echo %DATE% %TIME% - Posting server is already running >> "%LOG_FILE%"
@@ -315,6 +340,9 @@ if !ERRORLEVEL! neq 0 (
 REM Save the current process list
 echo %DATE% %TIME% - Saving PM2 process list >> "%LOG_FILE%"
 "!PM2_CMD!" save >> "%LOG_FILE%" 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo %DATE% %TIME% - WARNING: Failed to save PM2 process list >> "%LOG_FILE%"
+)
 
 REM Show final status
 echo %DATE% %TIME% - Final PM2 status: >> "%LOG_FILE%"
@@ -410,7 +438,21 @@ set PATH=%PATH%;%ProgramData%\npm
 REM Set NODE_PATH for module resolution
 set NODE_PATH=%APPDATA%\npm\node_modules;%ProgramFiles%\nodejs\node_modules
 
+REM Set HOMEPATH for PM2 to ensure proper configuration directory under SYSTEM account
+set HOMEPATH=%ProgramData%\pm2
+set PM2_HOME=%ProgramData%\pm2
+if not exist "%ProgramData%\pm2" (
+    echo %DATE% %TIME% - Creating PM2 home directory at %ProgramData%\pm2 >> "%LOG_FILE%"
+    mkdir "%ProgramData%\pm2"
+    if !ERRORLEVEL! neq 0 (
+        echo %DATE% %TIME% - ERROR: Failed to create PM2 home directory >> "%LOG_FILE%"
+        goto :end
+    )
+)
+
 echo %DATE% %TIME% - Updated PATH: %PATH% >> "%LOG_FILE%"
+echo %DATE% %TIME% - HOMEPATH set to: %HOMEPATH% >> "%LOG_FILE%"
+echo %DATE% %TIME% - PM2_HOME set to: %PM2_HOME% >> "%LOG_FILE%"
 
 REM Try to find PM2 executable in multiple ways
 set PM2_CMD=
@@ -462,9 +504,19 @@ if !ERRORLEVEL! neq 0 (
     goto :end
 )
 
+REM Verify PM2 home directory is accessible
+dir "%PM2_HOME%" >> "%LOG_FILE%" 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo %DATE% %TIME% - ERROR: PM2 home directory %PM2_HOME% is not accessible >> "%LOG_FILE%"
+    goto :end
+)
+
 REM Try to resurrect saved processes first
 echo %DATE% %TIME% - Attempting PM2 resurrect >> "%LOG_FILE%"
 "!PM2_CMD!" resurrect >> "%LOG_FILE%" 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo %DATE% %TIME% - WARNING: PM2 resurrect failed, proceeding to manual start >> "%LOG_FILE%"
+)
 
 REM Wait a moment for processes to start
 timeout /t 10 /nobreak > nul
@@ -476,8 +528,9 @@ if !ERRORLEVEL! neq 0 (
     "!PM2_CMD!" start "posting_server\server.js" --name "posting-server" --log "logs\posting-server.log" --exp-backoff-restart-delay=100 >> "%LOG_FILE%" 2>&1
     if !ERRORLEVEL! == 0 (
         echo %DATE% %TIME% - Posting server started successfully >> "%LOG_FILE%"
-    else (
-        echo %DATE% %TIME% - Failed to start posting server >> "%LOG_FILE%"
+    ) else (
+        echo %DATE% %TIME% - ERROR: Failed to start posting server >> "%LOG_FILE%"
+        goto :end
     )
 ) else (
     echo %DATE% %TIME% - Posting server is already running >> "%LOG_FILE%"
@@ -486,6 +539,9 @@ if !ERRORLEVEL! neq 0 (
 REM Save the current process list
 echo %DATE% %TIME% - Saving PM2 process list >> "%LOG_FILE%"
 "!PM2_CMD!" save >> "%LOG_FILE%" 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo %DATE% %TIME% - WARNING: Failed to save PM2 process list >> "%LOG_FILE%"
+)
 
 REM Show final status
 echo %DATE% %TIME% - Final PM2 status: >> "%LOG_FILE%"
