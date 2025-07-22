@@ -311,134 +311,36 @@ REM Change to the correct directory
 cd /d "$currentDir"
 echo Changed to: %CD%
 
+REM Set NODE_PATH and npm prefix
+set NODE_PATH=%APPDATA%\npm\node_modules
+call npm config set prefix %APPDATA%\npm
+
+REM Add npm global bin to PATH
+set PATH=%APPDATA%\npm;%PATH%
+
 REM Create logs directory if it doesn't exist
 if not exist "logs" mkdir logs
 
 REM Log the attempt
 echo %DATE% %TIME% - Starting PM2 Auto Start >> logs\startup.log
 
-REM Set environment variables for both current user and system contexts
-echo Setting up environment variables...
-echo %DATE% %TIME% - Setting up environment variables >> logs\startup.log
-
-REM Find Node.js installation path
-for /f "tokens=*" %%i in ('where node 2^>nul') do set NODE_PATH=%%i
-if not defined NODE_PATH (
-    echo Node.js not found in PATH, checking Program Files...
-    if exist "C:\Program Files\nodejs\node.exe" (
-        set NODE_PATH=C:\Program Files\nodejs
-        set PATH=%NODE_PATH%;%PATH%
-        echo Found Node.js in Program Files
-    ) else if exist "C:\Program Files (x86)\nodejs\node.exe" (
-        set NODE_PATH=C:\Program Files (x86)\nodejs
-        set PATH=%NODE_PATH%;%PATH%
-        echo Found Node.js in Program Files (x86)
-    )
-)
-
-REM Set multiple possible npm paths
-set NPM_PATHS=%APPDATA%\npm;%PROGRAMDATA%\npm;C:\Program Files\nodejs;%NODE_PATH%
-echo NPM paths: %NPM_PATHS%
-echo %DATE% %TIME% - NPM paths: %NPM_PATHS% >> logs\startup.log
-
-REM Add all possible paths to PATH
-set PATH=%NPM_PATHS%;%PATH%;%ALLUSERSPROFILE%\npm;C:\Users\Administrator\AppData\Roaming\npm
-
-REM Display current PATH for debugging
-echo Current PATH: %PATH%
-echo %DATE% %TIME% - Current PATH: %PATH% >> logs\startup.log
-
-REM Find PM2 executable
-echo %DATE% %TIME% - Searching for PM2 executable... >> logs\startup.log
-set PM2_CMD=
-for %%p in (pm2.cmd pm2.bat pm2) do (
-    echo %DATE% %TIME% - Checking for %%p >> logs\startup.log
-    for %%d in (%NPM_PATHS:;= %) do (
-        echo %DATE% %TIME% - Looking in: %%d >> logs\startup.log
-        if exist "%%d\%%p" (
-            set PM2_CMD=%%d\%%p
-            echo Found PM2 at: %%d\%%p
-            echo %DATE% %TIME% - Found PM2 at: %%d\%%p >> logs\startup.log
-            goto :pm2_found
-        )
-    )
-)
-
-REM Check for PM2 in PATH
-echo %DATE% %TIME% - Checking for PM2 in PATH... >> logs\startup.log
-for /f "tokens=*" %%i in ('where pm2 2^>nul') do (
-    set PM2_CMD=%%i
-    echo Found PM2 in PATH: %%i
-    echo %DATE% %TIME% - Found PM2 in PATH: %%i >> logs\startup.log
-    goto :pm2_found
-)
-
-echo PM2 not found, attempting to install...
-echo %DATE% %TIME% - PM2 not found, attempting to install >> logs\startup.log
-
-REM Try to find npm executable first
-set NPM_CMD=
-for %%d in (%NPM_PATHS:;= %) do (
-    if exist "%%d\npm.cmd" (
-        set NPM_CMD=%%d\npm.cmd
-        echo Found npm at: %%d\npm.cmd
-        echo %DATE% %TIME% - Found npm at: %%d\npm.cmd >> logs\startup.log
-        goto :npm_found
-    )
-)
-
-:npm_found
-if not defined NPM_CMD (
-    echo npm executable not found!
-    echo %DATE% %TIME% - npm executable not found! >> logs\startup.log
-    exit /b 1
-)
-
-echo Using npm: %NPM_CMD%
-echo %DATE% %TIME% - Using npm: %NPM_CMD% >> logs\startup.log
-
-REM Install PM2 using the full npm path
-echo %DATE% %TIME% - Running: %NPM_CMD% install -g pm2 >> logs\startup.log
-call "%NPM_CMD%" install -g pm2
-if %ERRORLEVEL% NEQ 0 (
-    echo Failed to install PM2
-    echo %DATE% %TIME% - Failed to install PM2 >> logs\startup.log
-    exit /b 1
-)
-
-for /f "tokens=*" %%i in ('where pm2 2^>nul') do (
-    set PM2_CMD=%%i
-    echo Installed PM2 at: %%i
-    echo %DATE% %TIME% - Installed PM2 at: %%i >> logs\startup.log
-)
-
-:pm2_found
-if not defined PM2_CMD (
-    echo PM2 executable not found!
-    echo %DATE% %TIME% - PM2 executable not found! >> logs\startup.log
-    exit /b 1
-)
-
-echo Using PM2: %PM2_CMD%
-echo %DATE% %TIME% - Using PM2: %PM2_CMD% >> logs\startup.log
-
 REM Try to resurrect saved processes
 echo Attempting to resurrect PM2 processes...
-call "%PM2_CMD%" resurrect >> logs\startup.log 2>&1
+call pm2 resurrect >> logs\startup.log 2>&1
 
 REM Wait a moment and check if resurrection was successful
 timeout /t 5 /nobreak > nul
-call "%PM2_CMD%" list | findstr "posting-server.*online" > nul
+call pm2 list | findstr "posting-server.*online" > nul
 
 if %ERRORLEVEL% NEQ 0 (
     echo PM2 resurrect failed or posting-server not found, starting manually...
     echo %DATE% %TIME% - PM2 resurrect failed, starting manually >> logs\startup.log
     
     REM Start the posting server manually
-    call "%PM2_CMD%" start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
+    call pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> logs\startup.log 2>&1
     
     REM Save the configuration
-    call "%PM2_CMD%" save >> logs\startup.log 2>&1
+    call pm2 save >> logs\startup.log 2>&1
     
     echo %DATE% %TIME% - Manual start completed >> logs\startup.log
 ) else (
@@ -447,7 +349,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM Final status check
 echo Final PM2 status:
-call "%PM2_CMD%" list >> logs\startup.log 2>&1
+call pm2 list >> logs\startup.log 2>&1
 
 echo %DATE% %TIME% - PM2 startup script completed >> logs\startup.log
 "@
