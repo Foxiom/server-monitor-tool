@@ -23,36 +23,119 @@ function Command-Exists {
     return Get-Command $command -ErrorAction SilentlyContinue
 }
 
-# Function to install Node.js
-function Install-NodeJs {
-    Write-Host "📦 Installing Node.js..."
-    if (-not (Command-Exists winget)) {
-        Write-Host "❌ Winget is required to install Node.js. Please install winget first."
+# Function to install Winget if not present
+function Install-Winget {
+    Write-Host " Installing Winget (Windows Package Manager)..."
+    try {
+        # Check if running on Windows 10 1809+ or Windows 11 where winget should be available
+        $osVersion = [System.Environment]::OSVersion.Version
+        if ($osVersion.Major -eq 10 -and $osVersion.Build -ge 17763) {
+            # Try to install from Microsoft Store
+            Write-Host " Downloading Winget from Microsoft Store..."
+            $progressPreference = 'silentlyContinue'
+            Invoke-WebRequest -Uri "https://aka.ms/getwinget" -OutFile "$env:TEMP\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+            Add-AppxPackage "$env:TEMP\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle"
+            Write-Host " Winget installed successfully"
+        } else {
+            Write-Host " Your Windows version may not support Winget. Falling back to Chocolatey..."
+            Install-Chocolatey
+            return
+        }
+    } catch {
+        Write-Host " Failed to install Winget. Falling back to Chocolatey..."
+        Install-Chocolatey
+    }
+}
+
+# Function to install Chocolatey
+function Install-Chocolatey {
+    Write-Host " Installing Chocolatey package manager..."
+    try {
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        # Refresh environment variables
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        Write-Host " Chocolatey installed successfully"
+    } catch {
+        Write-Host " Failed to install Chocolatey. Please install a package manager manually."
         exit 1
     }
-    winget install OpenJS.NodeJS --version 18
+}
+
+# Function to ensure package manager is available
+function Ensure-PackageManager {
+    if (Command-Exists winget) {
+        Write-Host " Winget is available"
+        return "winget"
+    } elseif (Command-Exists choco) {
+        Write-Host " Chocolatey is available"
+        return "choco"
+    } else {
+        Write-Host " No package manager found. Installing Winget (recommended)..."
+        Install-Winget
+        
+        # Check again after installation
+        if (Command-Exists winget) {
+            return "winget"
+        } elseif (Command-Exists choco) {
+            return "choco"
+        } else {
+            Write-Host " Failed to install any package manager. Please install Winget or Chocolatey manually."
+            exit 1
+        }
+    }
+}
+
+# Function to install Node.js
+function Install-NodeJs {
+    param ($packageManager)
+    Write-Host " Installing Node.js..."
+    
+    if ($packageManager -eq "winget") {
+        winget install OpenJS.NodeJS --version 18 --accept-source-agreements --accept-package-agreements
+    } elseif ($packageManager -eq "choco") {
+        choco install nodejs --version 18.20.4 -y
+    } else {
+        Write-Host " No valid package manager available"
+        exit 1
+    }
+    
+    # Refresh PATH to include Node.js
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 
 # Function to install Git
 function Install-Git {
-    Write-Host "📦 Installing Git..."
-    if (-not (Command-Exists winget)) {
-        Write-Host "❌ Winget is required to install Git. Please install winget first."
+    param ($packageManager)
+    Write-Host " Installing Git..."
+    
+    if ($packageManager -eq "winget") {
+        winget install Git.Git --accept-source-agreements --accept-package-agreements
+    } elseif ($packageManager -eq "choco") {
+        choco install git -y
+    } else {
+        Write-Host " No valid package manager available"
         exit 1
     }
-    winget install Git.Git
+    
+    # Refresh PATH to include Git
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
+
+# Check and install package manager
+$packageManager = Ensure-PackageManager
 
 # Check and install Node.js if not present
 if (-not (Command-Exists node)) {
     Write-Host "❌ Node.js is not installed."
-    Install-NodeJs
+    Install-NodeJs -packageManager $packageManager
 }
 
 # Check and install Git if not present
 if (-not (Command-Exists git)) {
     Write-Host "❌ Git is not installed."
-    Install-Git
+    Install-Git -packageManager $packageManager
 }
 
 # Check if PM2 is installed, if not install it globally
@@ -216,6 +299,16 @@ echo %DATE% %TIME% - Starting PM2 Auto Start as SYSTEM >> "$currentDir\logs\star
 echo %DATE% %TIME% - Working directory: %CD% >> "$currentDir\logs\startup.log"
 echo %DATE% %TIME% - User: %USERNAME% >> "$currentDir\logs\startup.log"
 echo %DATE% %TIME% - Current Path: %PATH% >> "$currentDir\logs\startup.log"
+
+REM Set up PM2 environment variables for SYSTEM account (fixes PM2 initialization error)
+set HOME=C:\Users\Administrator
+set HOMEPATH=\Users\Administrator
+set PM2_HOME=%HOME%\.pm2
+echo %DATE% %TIME% - Set PM2 environment: HOME=%HOME%, HOMEPATH=%HOMEPATH%, PM2_HOME=%PM2_HOME% >> "$currentDir\logs\startup.log"
+
+REM Create PM2 home directory if it doesn't exist
+if not exist "%PM2_HOME%" mkdir "%PM2_HOME%"
+echo %DATE% %TIME% - PM2 home directory ensured: %PM2_HOME% >> "$currentDir\logs\startup.log"
 
 REM Change to Administrator directory to access PM2 installation
 cd /d "$administratorDir"
