@@ -54,11 +54,11 @@ function Ensure-Chocolatey {
     }
 }
 
-# Function to install Node.js using Chocolatey
+# Function to install Node.js using Chocolatey (latest stable version)
 function Install-NodeJs {
-    Write-Host "📦 Installing Node.js using Chocolatey..."
+    Write-Host "📦 Installing the latest stable Node.js using Chocolatey..."
     try {
-        choco install nodejs --version=18.20.4 -y
+        choco install nodejs -y -s https://community.chocolatey.org/api/v2/
         # Refresh environment variables
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         Write-Host "✅ Node.js installed successfully"
@@ -68,11 +68,11 @@ function Install-NodeJs {
     }
 }
 
-# Function to install Git using Chocolatey
+# Function to install Git using Chocolatey (latest stable version)
 function Install-Git {
-    Write-Host "📦 Installing Git using Chocolatey..."
+    Write-Host "📦 Installing the latest stable Git using Chocolatey..."
     try {
-        choco install git -y
+        choco install git -y -s https://community.chocolatey.org/api/v2/
         # Refresh environment variables
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         Write-Host "✅ Git installed successfully"
@@ -97,10 +97,10 @@ if (-not (Command-Exists git)) {
     Install-Git
 }
 
-# Check if PM2 is installed, if not install it globally
+# Check if PM2 is installed, if not install it globally using the latest version
 if (-not (Command-Exists pm2)) {
-    Write-Host "📦 Installing PM2 globally..."
-    npm install -g pm2
+    Write-Host "📦 Installing the latest stable PM2 globally..."
+    npm install -g pm2@latest
 }
 
 # Remove existing posting_server directory if it exists
