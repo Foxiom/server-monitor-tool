@@ -23,6 +23,28 @@ command_exists() {
   command -v "$1" &> /dev/null
 }
 
+# Function to check Node.js version
+check_nodejs_version() {
+  # Required Node.js version for PM2
+  local required_major=16
+  
+  if command_exists node; then
+    local current_version=$(node -v | cut -d 'v' -f 2)
+    local current_major=$(echo $current_version | cut -d '.' -f 1)
+    
+    if [[ $current_major -lt $required_major ]]; then
+      echo "⚠️ Node.js version $current_version is too old. PM2 requires v${required_major}.0.0 or higher."
+      return 1
+    else
+      echo "✅ Node.js version $current_version is compatible with PM2."
+      return 0
+    fi
+  else
+    echo "❌ Node.js is not installed."
+    return 1
+  fi
+}
+
 # Function to install Node.js
 install_nodejs() {
   echo "📦 Installing Node.js..."
@@ -31,16 +53,28 @@ install_nodejs() {
     brew install node
   elif [[ -f /etc/debian_version ]]; then
     # Debian/Ubuntu
+    echo "📦 Installing Node.js 18.x (LTS) via NodeSource..."
     curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
     sudo apt-get install -y nodejs
   elif [[ -f /etc/redhat-release ]]; then
     # RHEL/CentOS
+    echo "📦 Installing Node.js 18.x (LTS) via NodeSource..."
     curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
     sudo yum install -y nodejs
   else
     echo "❌ Unsupported operating system for automatic Node.js installation"
+    echo "📋 Please manually install Node.js 16.x or higher from https://nodejs.org/"
     exit 1
   fi
+  
+  # Verify installation
+  if ! command_exists node; then
+    echo "❌ Failed to install Node.js. Please install manually."
+    exit 1
+  fi
+  
+  local installed_version=$(node -v | cut -d 'v' -f 2)
+  echo "✅ Successfully installed Node.js v$installed_version"
 }
 
 # Function to install Git
@@ -62,9 +96,9 @@ install_git() {
   fi
 }
 
-# Check and install Node.js if not present
-if ! command_exists node; then
-  echo "❌ Node.js is not installed."
+# Check if Node.js is installed and has compatible version
+if ! command_exists node || ! check_nodejs_version; then
+  echo "🔄 Installing/upgrading Node.js to a compatible version..."
   install_nodejs
 fi
 
