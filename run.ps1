@@ -103,10 +103,52 @@ if (-not (Command-Exists pm2)) {
     npm install -g pm2@latest
 }
 
-# Remove existing posting_server directory if it exists
+# Remove existing posting_server directory if it exists, at any cost
 if (Test-Path "posting_server") {
-    Write-Host "🗑️  Removing existing posting_server directory..."
-    Remove-Item -Recurse -Force "posting_server"
+    Write-Host "🗑️  Forcibly removing existing posting_server directory..."
+    try {
+        # Stop any PM2 processes that might be using the directory
+        if (Command-Exists pm2) {
+            pm2 kill -s
+        }
+
+        # Kill any Node.js processes that might be using the directory
+        Get-Process | Where-Object { $_.Path -like "*\posting_server\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+
+        # Take ownership of the directory and its contents
+        takeown /F "posting_server" /R /D Y
+        icacls "posting_server" /grant "$($env:USERNAME):F" /T
+
+        # Forcefully remove the directory, ignoring errors
+        Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
+
+        # Use cmd to attempt deletion if PowerShell fails
+        if (Test-Path "posting_server") {
+            cmd /c "rd /s /q posting_server"
+        }
+
+        # Verify removal
+        if (-not (Test-Path "posting_server")) {
+            Write-Host "✅ Successfully removed posting_server directory."
+        } else {
+            Write-Host "⚠️ Unable to remove posting_server directory. Manual intervention required." -ForegroundColor Yellow
+            Write-Host "📋 Manual steps:"
+            Write-Host "   1. Boot into Safe Mode"
+            Write-Host "   2. Delete the 'posting_server' folder from C:\Users\Administrator"
+            Write-Host "   3. Rerun the script"
+        }
+    } catch {
+        Write-Host "❌ Error during removal: $_" -ForegroundColor Red
+        Write-Host "⚠️ Attempting final deletion with elevated cmd..."
+        if (Test-Path "posting_server") {
+            Start-Process cmd -ArgumentList "/c rd /s /q posting_server" -Verb RunAs -Wait -ErrorAction SilentlyContinue
+        }
+        if (-not (Test-Path "posting_server")) {
+            Write-Host "✅ Forced removal successful after retry."
+        } else {
+            Write-Host "❌ Failed to remove posting_server directory. Manual deletion required." -ForegroundColor Red
+        }
+    }
 }
 
 # Create logs directory if it doesn't exist
