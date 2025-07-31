@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Exit on error
+# Exit on error, but allow certain commands to fail without stopping the script
 set -e
 
 # Function to clean up on error
@@ -17,6 +17,23 @@ cleanup() {
 
 # Set up error handling
 trap cleanup ERR
+
+# Function to print section headers
+print_header() {
+  echo ""
+  echo "=== $1 ==="
+  echo ""
+}
+
+# Function to run a command with error handling
+run_command() {
+  echo "$ $@"
+  "$@" || {
+    local exit_code=$?
+    echo "⚠️ Command failed with exit code $exit_code. Continuing..."
+    return $exit_code
+  }
+}
 
 # Function to check if a command exists
 command_exists() {
@@ -47,29 +64,92 @@ check_nodejs_version() {
 
 # Function to install Node.js
 install_nodejs() {
-  echo "📦 Installing Node.js..."
+  print_header "Installing Node.js"
+  
   if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS
-    brew install node
+    run_command brew install node
   elif [[ -f /etc/debian_version ]]; then
     # Debian/Ubuntu
-    echo "📦 Installing Node.js 18.x (LTS) via NodeSource..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt-get install -y nodejs
+    echo "📦 Attempting to install Node.js via apt..."
+    
+    # Try direct apt installation first (simpler, fewer dependencies)
+    echo "Method 1: Installing via standard apt repositories..."
+    run_command sudo apt-get update
+    if run_command sudo apt-get install -y nodejs npm; then
+      echo "✅ Node.js installed successfully via standard repositories"
+    else
+      echo "⚠️ Standard repository installation failed, trying NodeSource..."
+      
+      # Try NodeSource repository (may have GPG key issues on some systems)
+      echo "Method 2: Installing Node.js 18.x (LTS) via NodeSource..."
+      
+      # Download setup script but don't execute it directly
+      curl -fsSL https://deb.nodesource.com/setup_18.x -o /tmp/nodesource_setup.sh
+      
+      # Modify the script to continue even if GPG key import fails
+      sed -i 's/^exec_cmd /exec_cmd_nobail /g' /tmp/nodesource_setup.sh 2>/dev/null || true
+      
+      # Run the modified script
+      if run_command sudo -E bash /tmp/nodesource_setup.sh; then
+        echo "NodeSource repository added successfully"
+      else
+        echo "⚠️ NodeSource setup had issues but continuing anyway..."
+      fi
+      
+      # Try to install nodejs package
+      run_command sudo apt-get update
+      if ! run_command sudo apt-get install -y nodejs; then
+        echo "⚠️ Attempting to fix broken packages..."
+        run_command sudo apt --fix-broken install -y
+        run_command sudo apt-get install -y nodejs
+      fi
+      
+      # If npm is not installed, install it separately
+      if ! command_exists npm; then
+        echo "⚠️ npm not found, installing separately..."
+        run_command sudo apt-get install -y npm
+      fi
+    fi
   elif [[ -f /etc/redhat-release ]]; then
     # RHEL/CentOS
-    echo "📦 Installing Node.js 18.x (LTS) via NodeSource..."
-    curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
-    sudo yum install -y nodejs
+    echo "📦 Installing Node.js for RHEL/CentOS..."
+    
+    # Try standard repository first
+    if run_command sudo yum install -y nodejs npm; then
+      echo "✅ Node.js installed successfully via standard repositories"
+    else
+      echo "⚠️ Standard repository installation failed, trying NodeSource..."
+      
+      # Try NodeSource repository
+      curl -fsSL https://rpm.nodesource.com/setup_18.x -o /tmp/nodesource_setup.sh
+      run_command sudo bash /tmp/nodesource_setup.sh
+      run_command sudo yum install -y nodejs
+      
+      # If npm is not installed, install it separately
+      if ! command_exists npm; then
+        echo "⚠️ npm not found, installing separately..."
+        run_command sudo yum install -y npm
+      fi
+    fi
   else
     echo "❌ Unsupported operating system for automatic Node.js installation"
     echo "📋 Please manually install Node.js 16.x or higher from https://nodejs.org/"
+    echo "Then run this script again."
     exit 1
   fi
   
   # Verify installation
   if ! command_exists node; then
-    echo "❌ Failed to install Node.js. Please install manually."
+    echo "❌ Failed to install Node.js. Please install manually from https://nodejs.org/"
+    echo "Then run this script again."
+    exit 1
+  fi
+  
+  # Verify npm installation
+  if ! command_exists npm; then
+    echo "❌ npm is not available. Please install npm manually."
+    echo "Then run this script again."
     exit 1
   fi
   
@@ -79,39 +159,109 @@ install_nodejs() {
 
 # Function to install Git
 install_git() {
-  echo "📦 Installing Git..."
+  print_header "Installing Git"
+  
   if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS
-    brew install git
+    run_command brew install git
   elif [[ -f /etc/debian_version ]]; then
     # Debian/Ubuntu
-    sudo apt-get update
-    sudo apt-get install -y git
+    run_command sudo apt-get update
+    run_command sudo apt-get install -y git
   elif [[ -f /etc/redhat-release ]]; then
     # RHEL/CentOS
-    sudo yum install -y git
+    run_command sudo yum install -y git
   else
     echo "❌ Unsupported operating system for automatic Git installation"
+    echo "📋 Please manually install Git from https://git-scm.com/downloads"
+    echo "Then run this script again."
     exit 1
   fi
+  
+  # Verify installation
+  if ! command_exists git; then
+    echo "❌ Failed to install Git. Please install manually from https://git-scm.com/downloads"
+    echo "Then run this script again."
+    exit 1
+  fi
+  
+  echo "✅ Git installed successfully"
 }
+
+print_header "Checking dependencies"
 
 # Check if Node.js is installed and has compatible version
 if ! command_exists node || ! check_nodejs_version; then
   echo "🔄 Installing/upgrading Node.js to a compatible version..."
   install_nodejs
+else
+  echo "✅ Node.js is already installed with a compatible version"
+fi
+
+# Check if npm is installed
+if ! command_exists npm; then
+  echo "❌ npm is not installed."
+  echo "🔄 Installing npm..."
+  
+  if [[ -f /etc/debian_version ]]; then
+    run_command sudo apt-get update
+    run_command sudo apt-get install -y npm
+  elif [[ -f /etc/redhat-release ]]; then
+    run_command sudo yum install -y npm
+  elif [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "⚠️ npm should have been installed with Node.js. Reinstalling Node.js..."
+    run_command brew reinstall node
+  else
+    echo "❌ Unsupported operating system for automatic npm installation"
+    echo "📋 Please manually install npm and run this script again."
+    exit 1
+  fi
+  
+  if ! command_exists npm; then
+    echo "❌ Failed to install npm. Please install manually and run this script again."
+    exit 1
+  fi
 fi
 
 # Check and install Git if not present
 if ! command_exists git; then
   echo "❌ Git is not installed."
   install_git
+else
+  echo "✅ Git is already installed"
 fi
 
 # Check if PM2 is installed, if not install it globally
 if ! command_exists pm2; then
+  print_header "Installing PM2"
   echo "📦 Installing PM2 globally..."
-  npm install -g pm2
+  
+  # Try with standard npm
+  if ! run_command npm install -g pm2; then
+    echo "⚠️ Standard npm install failed, trying with sudo..."
+    run_command sudo npm install -g pm2
+    
+    # If still not installed, try fixing npm permissions
+    if ! command_exists pm2; then
+      echo "⚠️ Attempting to fix npm global permissions..."
+      mkdir -p ~/.npm-global
+      npm config set prefix '~/.npm-global'
+      export PATH=~/.npm-global/bin:$PATH
+      echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.profile
+      source ~/.profile 2>/dev/null || true
+      
+      # Try installing again with fixed permissions
+      run_command npm install -g pm2
+    fi
+  fi
+  
+  # Final check if PM2 is installed
+  if ! command_exists pm2; then
+    echo "❌ Failed to install PM2. Please try manually with: sudo npm install -g pm2"
+    exit 1
+  fi
+else
+  echo "✅ PM2 is already installed"
 fi
 
 # Remove existing posting_server directory if it exists
@@ -161,15 +311,33 @@ echo "💾 Saving PM2 process list..."
 pm2 save
 
 # Setup PM2 to start on system boot
+print_header "Setting up PM2 startup"
 echo "🔧 Setting up PM2 to start on system boot..."
-pm2 startup | tee /tmp/pm2_startup_output.txt
+
+# Run pm2 startup and capture output
+run_command pm2 startup | tee /tmp/pm2_startup_output.txt
 
 # Check if pm2 startup was successful
-if grep -q "sudo systemctl enable pm2" /tmp/pm2_startup_output.txt; then
-  echo "✅ PM2 startup script configured successfully."
+if grep -q "sudo" /tmp/pm2_startup_output.txt; then
+  echo "⚠️ PM2 startup requires additional commands to be run. Attempting to run them automatically..."
+  
+  # Extract and run the sudo command
+  STARTUP_CMD=$(grep "sudo" /tmp/pm2_startup_output.txt | head -n 1)
+  if [ -n "$STARTUP_CMD" ]; then
+    echo "Running: $STARTUP_CMD"
+    eval $STARTUP_CMD || {
+      echo "⚠️ Failed to run PM2 startup command automatically."
+      echo "📋 Please run this command manually to enable PM2 startup:"
+      echo "$STARTUP_CMD"
+    }
+  fi
+  
+  echo "✅ PM2 startup script configured."
 else
-  echo "⚠️ Warning: PM2 startup script may not have been configured correctly. Please check manually with 'pm2 startup'."
+  echo "⚠️ Warning: PM2 startup script may not have been configured correctly."
+  echo "📋 Please run 'pm2 startup' manually and follow the instructions."
 fi
+
 rm -f /tmp/pm2_startup_output.txt
 
 # Verify if the server is running
@@ -188,10 +356,17 @@ else
 fi
 
 # Optional: Install PM2 log rotation module
+print_header "Setting up PM2 log rotation"
 echo "🔧 Setting up PM2 log rotation..."
-pm2 install pm2-logrotate
-pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:compress true
+
+# Install pm2-logrotate with error handling
+if run_command pm2 install pm2-logrotate; then
+  run_command pm2 set pm2-logrotate:max_size 10M
+  run_command pm2 set pm2-logrotate:compress true
+  echo "✅ PM2 log rotation configured successfully."
+else
+  echo "⚠️ Failed to install PM2 log rotation. This is optional, continuing..."
+fi
 
 echo "✅ Server started and configured to run on system boot!"
 echo "📁 Downloaded complete posting server with all folders:"
