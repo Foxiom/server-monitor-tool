@@ -259,8 +259,19 @@ Get-ChildItem -Directory | ForEach-Object { icacls $_.Name /grant "Everyone:(OI)
 icacls "..\logs" /grant "Everyone:(OI)(CI)F" /Q
 
 # Start the server using PM2 with exponential backoff restart
-Write-Host "🚀 Starting posting server with PM2..."
-pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
+Write-Host "🚀 Setting up posting server with PM2..."
+
+# Check if posting-server process already exists in PM2
+$existingProcess = pm2 list | Select-String "posting-server"
+if ($existingProcess) {
+    Write-Host "⚠️ Process 'posting-server' already exists in PM2. Restarting it..."
+    pm2 restart posting-server --update-env
+    Write-Host "✅ Process 'posting-server' restarted successfully"
+} else {
+    Write-Host "🆕 Starting new PM2 process 'posting-server'..."
+    pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
+    Write-Host "✅ Process 'posting-server' started successfully"
+}
 
 # Save PM2 process list
 Write-Host "💾 Saving PM2 process list..."

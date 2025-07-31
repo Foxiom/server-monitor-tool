@@ -303,8 +303,18 @@ find . -type d -exec chmod 755 {} \;
 chmod 755 ../logs
 
 # Start the server using PM2 with exponential backoff restart
-echo "🚀 Starting posting server with PM2..."
-pm2 start server.js --name "posting-server" --log ../logs/posting-server.log --exp-backoff-restart-delay=100
+echo "🚀 Setting up posting server with PM2..."
+
+# Check if posting-server process already exists in PM2
+if pm2 list | grep -q "posting-server"; then
+  echo "⚠️ Process 'posting-server' already exists in PM2. Restarting it..."
+  pm2 restart posting-server --update-env
+  echo "✅ Process 'posting-server' restarted successfully"
+else
+  echo "🆕 Starting new PM2 process 'posting-server'..."
+  pm2 start server.js --name "posting-server" --log ../logs/posting-server.log --exp-backoff-restart-delay=100
+  echo "✅ Process 'posting-server' started successfully"
+fi
 
 # Save PM2 process list
 echo "💾 Saving PM2 process list..."
