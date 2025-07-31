@@ -1,6 +1,17 @@
 # Exit on error
 $ErrorActionPreference = "Stop"
 
+# Configure TLS 1.2 for compatibility with all Windows versions
+Write-Host "🔒 Configuring TLS 1.2 for secure connections..."
+try {
+    # Force TLS 1.2 for all web requests
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Write-Host "✅ TLS 1.2 configured successfully"
+} catch {
+    Write-Host "⚠️ Failed to configure TLS 1.2: $($_.Exception.Message)"
+    Write-Host "⚠️ This may cause issues with secure downloads. Continuing anyway..."
+}
+
 # Function to clean up on error
 function Cleanup {
     if (Test-Path "posting_server") {
@@ -33,7 +44,8 @@ function Install-Chocolatey {
     Write-Host "📦 Installing Chocolatey..."
     try {
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        # Force TLS 1.2 explicitly for Chocolatey installation
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
         Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
         # Refresh environment variables
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
@@ -161,7 +173,68 @@ Write-Host "🔧 Setting up posting server..."
 Write-Host "⬇️ Downloading complete posting server from GitHub..."
 $env:TEMP_DIR = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
 New-Item -ItemType Directory -Path $env:TEMP_DIR
-git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $env:TEMP_DIR
+
+# Ensure TLS 1.2 is set before Git operations
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+# Try Git clone with multiple attempts and fallback methods
+$maxAttempts = 3
+$attempt = 1
+$cloneSuccess = $false
+
+while (-not $cloneSuccess -and $attempt -le $maxAttempts) {
+    Write-Host "Attempt $attempt of $maxAttempts to clone repository..."
+    
+    try {
+        # First try standard git clone
+        git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $env:TEMP_DIR
+        $cloneSuccess = $true
+        Write-Host "✅ Repository cloned successfully"
+    } catch {
+        if ($attempt -lt $maxAttempts) {
+            Write-Host "⚠️ Clone failed: $($_.Exception.Message). Retrying with alternate method..."
+            
+            # On failure, try with different git config
+            if ($attempt -eq 1) {
+                # Try disabling SSL verification (only as fallback)
+                git config --global http.sslVerify false
+            } elseif ($attempt -eq 2) {
+                # Try with PowerShell direct download as last resort
+                try {
+                    $zipUrl = "https://github.com/Foxiom/server-monitor-tool/archive/main.zip"
+                    $zipPath = "$env:TEMP\server-monitor-tool.zip"
+                    
+                    Write-Host "Attempting direct download from $zipUrl"
+                    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+                    
+                    # Extract ZIP file
+                    Write-Host "Extracting ZIP file..."
+                    Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
+                    
+                    # Copy contents to temp directory
+                    Copy-Item -Path "$env:TEMP\server-monitor-tool-main\*" -Destination $env:TEMP_DIR -Recurse -Force
+                    
+                    # Clean up
+                    Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+                    Remove-Item -Path "$env:TEMP\server-monitor-tool-main" -Recurse -Force -ErrorAction SilentlyContinue
+                    
+                    $cloneSuccess = $true
+                    Write-Host "✅ Repository downloaded successfully via direct download"
+                    break
+                } catch {
+                    Write-Host "⚠️ Direct download failed: $($_.Exception.Message)"
+                }
+            }
+        } else {
+            Write-Host "❌ Failed to clone repository after $maxAttempts attempts: $($_.Exception.Message)" -ForegroundColor Red
+            Cleanup
+        }
+    }
+    $attempt++
+}
+
+# Reset git config if we changed it
+git config --global http.sslVerify true
 
 # Copy only the posting_server folder to our target location
 Copy-Item -Recurse "$env:TEMP_DIR\posting_server" -Destination "."
