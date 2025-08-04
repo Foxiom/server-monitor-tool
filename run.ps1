@@ -585,7 +585,6 @@ Write-Host "   4. Or test manually: .\pm2-autostart.bat"
 Write-Host ""
 Write-Host "⚡ Features of this improved setup:" -ForegroundColor Green
 Write-Host "   - Multiple auto-start methods for maximum reliability"
-Write-Host "   - Faster startup times (15-30 second delay vs 2+ minutes)"
 Write-Host "   - Better error handling and logging"
 Write-Host "   - Works with or without user login (if service is available)"
 Write-Host "   - Self-healing: automatically restarts if PM2 processes fail"
