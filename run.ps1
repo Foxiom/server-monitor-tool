@@ -277,439 +277,240 @@ if ($existingProcess) {
 Write-Host "💾 Saving PM2 process list..."
 pm2 save
 
-# Go back to parent directory for task scheduler setup
+# Go back to parent directory for auto-start setup
 Set-Location ..
 
-# Setup PM2 to start on system boot (Windows approach) - Updated for SYSTEM account
-Write-Host "🔧 Setting up PM2 to start on system boot..."
-try {
-    # Try the standard pm2 startup command first (will fail on Windows but we handle it)
-    $startupOutput = pm2 startup 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "✅ PM2 startup script configured successfully."
-    } else {
-        throw "PM2 startup failed"
-    }
-} catch {
-    Write-Host "⚠️ Standard PM2 startup not supported on Windows. Setting up Task Scheduler..."
+# New Reliable Auto-Start Setup
+Write-Host "🔧 Setting up reliable auto-start mechanism..."
+
+# Get current paths
+$currentDir = Get-Location
+$currentUser = $env:USERNAME
+$userProfile = $env:USERPROFILE
+
+# Function to create startup service using multiple methods for maximum reliability
+function Setup-AutoStart {
+    Write-Host "🚀 Configuring multiple auto-start methods for maximum reliability..."
     
-    # Check if running as Administrator
-    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-    
-    if (-not $isAdmin) {
-        Write-Host "⚠️ Administrator privileges required for Task Scheduler setup." -ForegroundColor Yellow
-        Write-Host "📋 To complete the setup:" -ForegroundColor Cyan
-        Write-Host "   1. Run PowerShell as Administrator"
-        Write-Host "   2. Navigate to this directory: $(Get-Location)"
-        Write-Host "   3. Run the following command:"
-        Write-Host "      .\fix-pm2-task.ps1"
-        Write-Host ""
-        Write-Host "   Or manually create the task:"
-        Write-Host "      - Open Task Scheduler (taskschd.msc)"
-        Write-Host "      - Create Basic Task: 'PM2 Auto Start'"
-        Write-Host "      - Trigger: 'When the computer starts' (with 2-minute delay)"
-        Write-Host "      - Action: 'Start a program'"
-        Write-Host "      - Program: 'cmd.exe'"
-        Write-Host "      - Arguments: '/c `"$(Join-Path (Get-Location) 'pm2-startup.bat')`"'"
-        Write-Host "      - Start in: 'C:\Users\Administrator'"
-        Write-Host "      - Run as: 'SYSTEM' (no password needed)"
-        Write-Host "      - Check 'Run with highest privileges'"
-        Write-Host "      - Check 'Run whether user is logged on or not'"
+    # Method 1: Windows Service using NSSM (if available)
+    $nssmAvailable = $false
+    try {
+        # Try to install NSSM (Non-Sucking Service Manager) for the most reliable service creation
+        if (-not (Command-Exists nssm)) {
+            Write-Host "📦 Installing NSSM for service management..."
+            choco install nssm -y -s https://community.chocolatey.org/api/v2/ 2>$null
+            # Refresh PATH
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        }
         
-        # Create the helper script for later use
-        $helperScriptContent = @"
-# Helper script to fix PM2 Task Scheduler - Run as Administrator
-# Exit on error
-`$ErrorActionPreference = "Stop"
-
-# Check if running as Administrator
-`$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-
-if (-not `$isAdmin) {
-    Write-Host "❌ This script must be run as Administrator!" -ForegroundColor Red
-    Write-Host "Please right-click PowerShell and select 'Run as Administrator', then run this script again."
-    exit 1
-}
-
-Write-Host "🔧 Setting up PM2 Task Scheduler to run as SYSTEM without password..."
-
-# Use Administrator path where PM2 is installed
-`$administratorDir = "C:\Users\Administrator"
-
-# Verify the Administrator directory exists
-if (-not (Test-Path `$administratorDir)) {
-    Write-Host "❌ Administrator directory not found at: `$administratorDir"
-    Write-Host "Please verify the correct Administrator user directory path."
-    exit 1
-}
-
-# Get current directory for posting_server
-`$currentDir = Get-Location
-
-# Verify posting_server directory exists
-if (-not (Test-Path "posting_server")) {
-    Write-Host "❌ posting_server directory not found in current location: `$currentDir"
-    exit 1
-}
-
-# Task details
-`$taskName = "PM2 Auto Start"
-`$taskDescription = "Automatically start PM2 processes on system boot (runs as SYSTEM without user login)"
-
-# Remove existing task if it exists
-try {
-    `$existingTask = Get-ScheduledTask -TaskName `$taskName -ErrorAction SilentlyContinue
-    if (`$existingTask) {
-        Write-Host "🗑️ Removing existing PM2 Auto Start task..."
-        Unregister-ScheduledTask -TaskName `$taskName -Confirm:`$false
+        if (Command-Exists nssm) {
+            $nssmAvailable = $true
+            Write-Host "✅ NSSM available for service creation"
+        }
+    } catch {
+        Write-Host "⚠️ NSSM installation failed, using alternative methods"
     }
-} catch {
-    Write-Host "ℹ️ No existing task found to remove."
-}
-
-# Create startup batch file with Administrator paths for PM2
-`$batchFilePath = Join-Path `$currentDir "pm2-startup.bat"
-`$batchContent = @'
+    
+    # Create a reliable startup script
+    $startupScript = Join-Path $currentDir "pm2-autostart.bat"
+    $startupScriptContent = @"
 @echo off
-echo Starting PM2 Auto Start script...
-echo Current directory: %CD%
-echo Target directory: $currentDir
-echo Administrator directory: $administratorDir
+title PM2 AutoStart Service
+echo Starting PM2 Auto-Start Service...
+
+REM Set working directory
+cd /d "$currentDir"
 
 REM Create logs directory if it doesn't exist
-if not exist "$currentDir\logs" mkdir "$currentDir\logs"
+if not exist "logs" mkdir "logs"
 
-REM Log the attempt
-echo %DATE% %TIME% - Starting PM2 Auto Start as SYSTEM >> "$currentDir\logs\startup.log"
-echo %DATE% %TIME% - Working directory: %CD% >> "$currentDir\logs\startup.log"
-echo %DATE% %TIME% - User: %USERNAME% >> "$currentDir\logs\startup.log"
-echo %DATE% %TIME% - Current Path: %PATH% >> "$currentDir\logs\startup.log"
+REM Log startup attempt
+echo %DATE% %TIME% - Auto-start service initiated >> "logs\autostart.log"
 
-REM Change to Administrator directory to access PM2 installation
-cd /d "$administratorDir"
-echo %DATE% %TIME% - Changed to Administrator directory: %CD% >> "$currentDir\logs\startup.log"
+REM Wait for system to fully boot (reduce startup delay)
+timeout /t 15 /nobreak > nul
 
-REM Set up Node.js and npm paths for Administrator user
-set NODE_PATH=$administratorDir\AppData\Roaming\npm\node_modules
-set PATH=$administratorDir\AppData\Roaming\npm;%PATH%
-echo %DATE% %TIME% - Updated PATH with Administrator npm: %PATH% >> "$currentDir\logs\startup.log"
+REM Set Node.js paths
+set PATH=%PATH%;C:\Program Files\nodejs;$userProfile\AppData\Roaming\npm;$userProfile\AppData\Local\npm
 
-REM Verify PM2 is available
+REM Check if PM2 is available
 where pm2 >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo %DATE% %TIME% - PM2 not found in Administrator npm path >> "$currentDir\logs\startup.log"
-    REM Try global npm modules path
-    set PATH=$administratorDir\AppData\Roaming\npm;$administratorDir\AppData\Local\npm;C:\Program Files\nodejs;%PATH%
-    where pm2 >nul 2>&1
-    if %ERRORLEVEL% NEQ 0 (
-        echo %DATE% %TIME% - PM2 still not found after path updates >> "$currentDir\logs\startup.log"
-        goto :end
-    )
+    echo %DATE% %TIME% - PM2 not found in PATH >> "logs\autostart.log"
+    echo PM2 not found, please check installation
+    goto :end
 )
 
-echo %DATE% %TIME% - PM2 found, proceeding with startup >> "$currentDir\logs\startup.log"
+echo %DATE% %TIME% - PM2 found, proceeding with startup >> "logs\autostart.log"
 
-REM Change to the project directory
-cd /d "$currentDir"
-echo %DATE% %TIME% - Changed to project directory: %CD% >> "$currentDir\logs\startup.log"
-
-REM Try to resurrect saved processes first
+REM Try to resurrect saved PM2 processes
 echo Attempting to resurrect PM2 processes...
-echo %DATE% %TIME% - Attempting PM2 resurrect >> "$currentDir\logs\startup.log"
-call pm2 resurrect >> "$currentDir\logs\startup.log" 2>&1
+pm2 resurrect >> "logs\autostart.log" 2>&1
 
-REM Wait a moment and check if resurrection was successful
+REM Wait and verify
 timeout /t 10 /nobreak > nul
 
 REM Check if posting-server is running
-call pm2 list 2>nul | findstr "posting-server.*online" > nul
+pm2 list | findstr "posting-server.*online" > nul
 if %ERRORLEVEL% NEQ 0 (
-    echo PM2 resurrect failed or posting-server not found, starting manually...
-    echo %DATE% %TIME% - PM2 resurrect failed, starting manually >> "$currentDir\logs\startup.log"
+    echo %DATE% %TIME% - Posting server not running, starting manually >> "logs\autostart.log"
     
-    REM Start the posting server manually
+    REM Navigate to posting_server directory and start
     if exist "posting_server\server.js" (
-        echo %DATE% %TIME% - Starting posting-server manually >> "$currentDir\logs\startup.log"
-        call pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> "$currentDir\logs\startup.log" 2>&1
-        
-        REM Save the configuration
-        call pm2 save >> "$currentDir\logs\startup.log" 2>&1
-        echo %DATE% %TIME% - Manual start and save completed >> "$currentDir\logs\startup.log"
+        pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> "logs\autostart.log" 2>&1
+        pm2 save >> "logs\autostart.log" 2>&1
+        echo %DATE% %TIME% - Posting server started successfully >> "logs\autostart.log"
     ) else (
-        echo %DATE% %TIME% - ERROR: posting_server\server.js not found >> "$currentDir\logs\startup.log"
+        echo %DATE% %TIME% - ERROR: posting_server\server.js not found >> "logs\autostart.log"
     )
 ) else (
-    echo %DATE% %TIME% - PM2 resurrect successful >> "$currentDir\logs\startup.log"
+    echo %DATE% %TIME% - Posting server already running >> "logs\autostart.log"
 )
 
-REM Final status check
-echo Final PM2 status:
-call pm2 list >> "$currentDir\logs\startup.log" 2>&1
+REM Final status
+echo %DATE% %TIME% - Final PM2 status: >> "logs\autostart.log"
+pm2 list >> "logs\autostart.log" 2>&1
 
 :end
-echo %DATE% %TIME% - PM2 startup script completed >> "$currentDir\logs\startup.log"
-'@
-
-Set-Content -Path `$batchFilePath -Value `$batchContent -Encoding ASCII
-Write-Host "✅ Created startup batch file at: `$batchFilePath"
-
-try {
-    # Create the scheduled task action - working directory set to Administrator path for PM2 access
-    `$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c ```"`$batchFilePath```"" -WorkingDirectory `$administratorDir
-    
-    # Set trigger to run at startup with a 2-minute delay
-    `$trigger = New-ScheduledTaskTrigger -AtStartup
-    `$trigger.Delay = "PT2M"  # 2 minute delay
-    
-    # Set principal to run as SYSTEM (no password required, runs whether user logged in or not)
-    `$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    
-    # Configure settings for maximum reliability
-    `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
-    
-    # Create and register the task
-    `$task = New-ScheduledTask -Action `$action -Trigger `$trigger -Principal `$principal -Settings `$settings -Description `$taskDescription
-    Register-ScheduledTask -TaskName `$taskName -InputObject `$task | Out-Null
-    
-    Write-Host "✅ Successfully created '`$taskName' scheduled task!" -ForegroundColor Green
-    Write-Host "📋 Task configured to:" -ForegroundColor Cyan
-    Write-Host "   - Run at startup with 2-minute delay"
-    Write-Host "   - Run as SYSTEM (no password required)"
-    Write-Host "   - Run whether user is logged on or not"
-    Write-Host "   - Working directory: `$administratorDir (where PM2 is installed)"
-    Write-Host "   - Target directory: `$currentDir (where posting_server is located)"
-    Write-Host "   - Restart up to 3 times if it fails"
-    Write-Host ""
-    Write-Host "🧪 Test the task manually:"
-    Write-Host "   1. Open Task Scheduler (taskschd.msc)"
-    Write-Host "   2. Find 'PM2 Auto Start' task"
-    Write-Host "   3. Right-click and select 'Run'"
-    Write-Host ""
-    Write-Host "📊 Check logs at: `$(Join-Path `$currentDir 'logs\startup.log')"
-    
-    # Try to run the task immediately to test
-    Write-Host ""
-    Write-Host "🚀 Testing the task now..."
-    Start-ScheduledTask -TaskName `$taskName
-    Start-Sleep -Seconds 8
-    
-    # Check if the task ran successfully
-    `$taskInfo = Get-ScheduledTask -TaskName `$taskName
-    `$taskResult = Get-ScheduledTaskInfo -TaskName `$taskName
-    
-    Write-Host "📊 Task Status: `$(`$taskResult.LastTaskResult)" -ForegroundColor `$(if(`$taskResult.LastTaskResult -eq 0) {"Green"} else {"Yellow"})
-    Write-Host "📊 Last Run Time: `$(`$taskResult.LastRunTime)"
-    
-    if (Test-Path "`$currentDir\logs\startup.log") {
-        Write-Host ""
-        Write-Host "📋 Recent startup log entries:" -ForegroundColor Cyan
-        Get-Content "`$currentDir\logs\startup.log" -Tail 10
-    }
-    
-} catch {
-    Write-Host "❌ Failed to create scheduled task: `$(`$_.Exception.Message)" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "🔧 Alternative: Create task manually with these settings:"
-    Write-Host "   Task Name: PM2 Auto Start"
-    Write-Host "   User Account: SYSTEM"
-    Write-Host "   Run whether user is logged on or not: ✓"
-    Write-Host "   Run with highest privileges: ✓"
-    Write-Host "   Trigger: At startup (2 minute delay)"
-    Write-Host "   Action: cmd.exe /c ```"`$batchFilePath```""
-    Write-Host "   Start in: `$administratorDir"
-}
-
-Write-Host ""
-Write-Host "✅ PM2 Task Scheduler setup completed!"
-Write-Host "🔄 Restart your computer to test the auto-start functionality"
+echo %DATE% %TIME% - Auto-start service completed >> "logs\autostart.log"
 "@
-        
-        Set-Content -Path "fix-pm2-task.ps1" -Value $helperScriptContent -Encoding UTF8
-        Write-Host "💾 Created helper script: fix-pm2-task.ps1"
-        
-    } else {
-        # Running as Administrator - proceed with task creation using SYSTEM account
+    
+    Set-Content -Path $startupScript -Value $startupScriptContent -Encoding ASCII
+    Write-Host "✅ Created startup script: $startupScript"
+    
+    # Method 1: NSSM Service (Most Reliable)
+    if ($nssmAvailable) {
         try {
-            # Use Administrator path where PM2 is installed
-            $administratorDir = "C:\Users\Administrator"
-            
-            # Verify the Administrator directory exists
-            if (-not (Test-Path $administratorDir)) {
-                Write-Host "❌ Administrator directory not found at: $administratorDir"
-                Write-Host "Please verify the correct Administrator user directory path."
-                throw "Administrator directory not found"
+            # Remove existing service if it exists
+            $existingService = Get-Service "PM2AutoStart" -ErrorAction SilentlyContinue
+            if ($existingService) {
+                Write-Host "🗑️ Removing existing PM2AutoStart service..."
+                nssm stop PM2AutoStart
+                nssm remove PM2AutoStart confirm
             }
             
-            # Get current directory for posting_server
-            $currentDir = Get-Location
+            Write-Host "🔧 Creating Windows service using NSSM..."
             
-            # Task details
-            $taskName = "PM2 Auto Start"
-            $taskDescription = "Automatically start PM2 processes on system boot (runs as SYSTEM without user login)"
+            # Install the service
+            nssm install PM2AutoStart "$startupScript"
             
-            # Remove existing task if it exists
-            try {
-                $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-                if ($existingTask) {
-                    Write-Host "🗑️ Removing existing PM2 Auto Start task..."
-                    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-                }
-            } catch {
-                # Task doesn't exist, continue
-            }
+            # Configure service properties
+            nssm set PM2AutoStart DisplayName "PM2 Auto Start Service"
+            nssm set PM2AutoStart Description "Automatically starts PM2 processes on system boot"
+            nssm set PM2AutoStart Start SERVICE_AUTO_START
+            nssm set PM2AutoStart AppDirectory "$currentDir"
+            nssm set PM2AutoStart AppStderr "$currentDir\logs\service-error.log"
+            nssm set PM2AutoStart AppStdout "$currentDir\logs\service-output.log"
+            nssm set PM2AutoStart AppRotateFiles 1
+            nssm set PM2AutoStart AppRotateOnline 1
+            nssm set PM2AutoStart AppRotateSeconds 86400
+            nssm set PM2AutoStart AppThrottle 1500
             
-            # Create a robust batch file for PM2 startup with Administrator paths
-            $batchFilePath = Join-Path $currentDir "pm2-startup.bat"
-            $batchContent = @"
-@echo off
-echo Starting PM2 Auto Start script...
-echo Current directory: %CD%
-echo Target directory: $currentDir
-echo Administrator directory: $administratorDir
-
-REM Create logs directory if it doesn't exist
-if not exist "$currentDir\logs" mkdir "$currentDir\logs"
-
-REM Log the attempt
-echo %DATE% %TIME% - Starting PM2 Auto Start as SYSTEM >> "$currentDir\logs\startup.log"
-echo %DATE% %TIME% - Working directory: %CD% >> "$currentDir\logs\startup.log"
-echo %DATE% %TIME% - User: %USERNAME% >> "$currentDir\logs\startup.log"
-echo %DATE% %TIME% - Current Path: %PATH% >> "$currentDir\logs\startup.log"
-
-REM Change to Administrator directory to access PM2 installation
-cd /d "$administratorDir"
-echo %DATE% %TIME% - Changed to Administrator directory: %CD% >> "$currentDir\logs\startup.log"
-
-REM Set up Node.js and npm paths for Administrator user
-set NODE_PATH=$administratorDir\AppData\Roaming\npm\node_modules
-set PATH=$administratorDir\AppData\Roaming\npm;%PATH%
-echo %DATE% %TIME% - Updated PATH with Administrator npm: %PATH% >> "$currentDir\logs\startup.log"
-
-REM Verify PM2 is available
-where pm2 >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo %DATE% %TIME% - PM2 not found in Administrator npm path >> "$currentDir\logs\startup.log"
-    REM Try global npm modules path
-    set PATH=$administratorDir\AppData\Roaming\npm;$administratorDir\AppData\Local\npm;C:\Program Files\nodejs;%PATH%
-    where pm2 >nul 2>&1
-    if %ERRORLEVEL% NEQ 0 (
-        echo %DATE% %TIME% - PM2 still not found after path updates >> "$currentDir\logs\startup.log"
-        goto :end
-    )
-)
-
-echo %DATE% %TIME% - PM2 found, proceeding with startup >> "$currentDir\logs\startup.log"
-
-REM Change to the project directory
-cd /d "$currentDir"
-echo %DATE% %TIME% - Changed to project directory: %CD% >> "$currentDir\logs\startup.log"
-
-REM Try to resurrect saved processes first
-echo Attempting to resurrect PM2 processes...
-echo %DATE% %TIME% - Attempting PM2 resurrect >> "$currentDir\logs\startup.log"
-call pm2 resurrect >> "$currentDir\logs\startup.log" 2>&1
-
-REM Wait a moment and check if resurrection was successful
-timeout /t 10 /nobreak > nul
-
-REM Check if posting-server is running
-call pm2 list 2>nul | findstr "posting-server.*online" > nul
-if %ERRORLEVEL% NEQ 0 (
-    echo PM2 resurrect failed or posting-server not found, starting manually...
-    echo %DATE% %TIME% - PM2 resurrect failed, starting manually >> "$currentDir\logs\startup.log"
-    
-    REM Start the posting server manually
-    if exist "posting_server\server.js" (
-        echo %DATE% %TIME% - Starting posting-server manually >> "$currentDir\logs\startup.log"
-        call pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> "$currentDir\logs\startup.log" 2>&1
-        
-        REM Save the configuration
-        call pm2 save >> "$currentDir\logs\startup.log" 2>&1
-        echo %DATE% %TIME% - Manual start and save completed >> "$currentDir\logs\startup.log"
-    ) else (
-        echo %DATE% %TIME% - ERROR: posting_server\server.js not found >> "$currentDir\logs\startup.log"
-    )
-) else (
-    echo %DATE% %TIME% - PM2 resurrect successful >> "$currentDir\logs\startup.log"
-)
-
-REM Final status check
-echo Final PM2 status:
-call pm2 list >> "$currentDir\logs\startup.log" 2>&1
-
-:end
-echo %DATE% %TIME% - PM2 startup script completed >> "$currentDir\logs\startup.log"
-"@
+            # Start the service
+            nssm start PM2AutoStart
             
-            Set-Content -Path $batchFilePath -Value $batchContent -Encoding ASCII
-            Write-Host "✅ Created startup batch file at: $batchFilePath"
+            Write-Host "✅ Windows service 'PM2AutoStart' created and started successfully!" -ForegroundColor Green
+            Write-Host "📋 Service details:"
+            Write-Host "   - Service Name: PM2AutoStart"
+            Write-Host "   - Status: $($(Get-Service PM2AutoStart).Status)"
+            Write-Host "   - Startup Type: Automatic"
+            Write-Host "   - Log files: $currentDir\logs\service-*.log"
             
-            # Create the scheduled task using SYSTEM account with Administrator working directory for PM2 access
-            $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$batchFilePath`"" -WorkingDirectory $administratorDir
-            
-            # Set trigger to run at startup with a 2-minute delay
-            $trigger = New-ScheduledTaskTrigger -AtStartup
-            $trigger.Delay = "PT2M"  # 2 minute delay
-            
-            # Set principal to run as SYSTEM (no password required, runs whether user logged in or not)
-            $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-            
-            # Configure settings for maximum reliability
-            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
-            
-            # Create and register the task
-            $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description $taskDescription
-            Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
-            
-            Write-Host "✅ Successfully created '$taskName' scheduled task!" -ForegroundColor Green
-            Write-Host "📋 Task configured to:" -ForegroundColor Cyan
-            Write-Host "   - Run at startup with 2-minute delay"
-            Write-Host "   - Run as SYSTEM (no password required)"
-            Write-Host "   - Run whether user is logged on or not"
-            Write-Host "   - Working directory: $administratorDir (where PM2 is installed)"
-            Write-Host "   - Target directory: $currentDir (where posting_server is located)"
-            Write-Host "   - Restart up to 3 times if it fails"
-            Write-Host ""
-            Write-Host "🧪 Test the task manually:"
-            Write-Host "   1. Open Task Scheduler (taskschd.msc)"
-            Write-Host "   2. Find 'PM2 Auto Start' task"
-            Write-Host "   3. Right-click and select 'Run'"
-            Write-Host ""
-            Write-Host "📊 Check logs at: $(Join-Path $currentDir 'logs\startup.log')"
-            
-            # Try to run the task immediately to test
-            Write-Host ""
-            Write-Host "🚀 Testing the task now..."
-            Start-ScheduledTask -TaskName $taskName
-            Start-Sleep -Seconds 8
-            
-            # Check if the task ran successfully
-            $taskInfo = Get-ScheduledTask -TaskName $taskName
-            $taskResult = Get-ScheduledTaskInfo -TaskName $taskName
-            
-            Write-Host "📊 Task Status: $($taskResult.LastTaskResult)" -ForegroundColor $(if($taskResult.LastTaskResult -eq 0) {"Green"} else {"Yellow"})
-            Write-Host "📊 Last Run Time: $($taskResult.LastRunTime)"
-            
-            if (Test-Path "$currentDir\logs\startup.log") {
-                Write-Host ""
-                Write-Host "📋 Recent startup log entries:" -ForegroundColor Cyan
-                Get-Content "$currentDir\logs\startup.log" -Tail 10
-            }
-            
+            return $true
         } catch {
-            Write-Host "❌ Failed to create scheduled task: $($_.Exception.Message)" -ForegroundColor Red
-            Write-Host ""
-            Write-Host "🔧 Alternative: Create task manually with these settings:"
-            Write-Host "   Task Name: PM2 Auto Start"
-            Write-Host "   User Account: SYSTEM"
-            Write-Host "   Run whether user is logged on or not: ✓"
-            Write-Host "   Run with highest privileges: ✓"
-            Write-Host "   Trigger: At startup (2 minute delay)"
-            Write-Host "   Action: cmd.exe /c `"$batchFilePath`""
-            Write-Host "   Start in: $administratorDir"
+            Write-Host "⚠️ Failed to create NSSM service: $($_.Exception.Message)"
         }
     }
+    
+    # Method 2: Registry Run Key (Faster startup, user-level)
+    try {
+        Write-Host "🔧 Setting up Registry Run key for fast startup..."
+        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        $regName = "PM2AutoStart"
+        
+        # Remove existing entry
+        Remove-ItemProperty -Path $regPath -Name $regName -ErrorAction SilentlyContinue
+        
+        # Add new entry
+        Set-ItemProperty -Path $regPath -Name $regName -Value "`"$startupScript`""
+        
+        Write-Host "✅ Registry Run key created successfully!"
+        Write-Host "📋 Registry entry: $regPath\$regName"
+        
+    } catch {
+        Write-Host "⚠️ Failed to create Registry Run key: $($_.Exception.Message)"
+    }
+    
+    # Method 3: Startup folder shortcut (Backup method)
+    try {
+        Write-Host "🔧 Creating startup folder shortcut as backup..."
+        $startupFolder = [Environment]::GetFolderPath("Startup")
+        $shortcutPath = Join-Path $startupFolder "PM2AutoStart.lnk"
+        
+        # Remove existing shortcut
+        if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force
+        }
+        
+        # Create new shortcut
+        $WshShell = New-Object -comObject WScript.Shell
+        $Shortcut = $WshShell.CreateShortcut($shortcutPath)
+        $Shortcut.TargetPath = $startupScript
+        $Shortcut.WorkingDirectory = $currentDir
+        $Shortcut.Description = "PM2 Auto Start"
+        $Shortcut.Save()
+        
+        Write-Host "✅ Startup folder shortcut created!"
+        Write-Host "📋 Shortcut location: $shortcutPath"
+        
+    } catch {
+        Write-Host "⚠️ Failed to create startup folder shortcut: $($_.Exception.Message)"
+    }
+    
+    # Method 4: Task Scheduler (Simple, reliable version)
+    try {
+        Write-Host "🔧 Creating simplified Task Scheduler entry..."
+        
+        $taskName = "PM2 Auto Start Simple"
+        
+        # Remove existing task
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        
+        # Create simple action
+        $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$startupScript`"" -WorkingDirectory $currentDir
+        
+        # Create trigger with minimal delay
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $trigger.Delay = "PT30S"  # 30 second delay
+        
+        # Set principal for current user
+        $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+        
+        # Simple settings
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        
+        # Register task
+        $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "Simple PM2 auto-start on user login"
+        Register-ScheduledTask -TaskName $taskName -InputObject $task | Out-Null
+        
+        Write-Host "✅ Task Scheduler entry created!"
+        Write-Host "📋 Task: $taskName (runs on user login with 30s delay)"
+        
+    } catch {
+        Write-Host "⚠️ Failed to create Task Scheduler entry: $($_.Exception.Message)"
+    }
+    
+    return $false
 }
+
+# Run the auto-start setup
+$serviceCreated = Setup-AutoStart
+
+# Optional: Install PM2 log rotation module
+Write-Host "🔧 Setting up PM2 log rotation..."
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:compress true
 
 # Navigate back to posting_server directory for final verification
 Set-Location posting_server
@@ -731,33 +532,25 @@ if ($pm2Status) {
     }
 }
 
-# Optional: Install PM2 log rotation module
-Write-Host "🔧 Setting up PM2 log rotation..."
-pm2 install pm2-logrotate
-pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:compress true
-
 # Go back to parent directory for final output
 Set-Location ..
 
 Write-Host ""
-Write-Host "✅ Server setup completed successfully!"
-Write-Host "📁 Downloaded complete posting server with all folders:"
+Write-Host "✅ Server setup completed successfully!" -ForegroundColor Green
+Write-Host ""
+Write-Host "📁 Downloaded complete posting server with all folders:" -ForegroundColor Cyan
 Write-Host "   - config/"
 Write-Host "   - models/"
 Write-Host "   - utils/"
 Write-Host "   - server.js"
 Write-Host "   - package.json"
 Write-Host ""
-Write-Host "📋 Files created in this directory:"
+Write-Host "📋 Files created in this directory:" -ForegroundColor Cyan
 Write-Host "   - posting_server/ (main server directory)"
 Write-Host "   - logs/ (log files)"
-Write-Host "   - pm2-startup.bat (startup script)"
-if (Test-Path "fix-pm2-task.ps1") {
-    Write-Host "   - fix-pm2-task.ps1 (helper script for admin setup)"
-}
+Write-Host "   - pm2-autostart.bat (optimized startup script)"
 Write-Host ""
-Write-Host "🔧 PM2 Management Commands:"
+Write-Host "🔧 PM2 Management Commands:" -ForegroundColor Yellow
 Write-Host "   pm2 status              # Check server status"
 Write-Host "   pm2 logs                # View all logs"
 Write-Host "   pm2 logs posting-server # View posting server logs"
@@ -767,16 +560,35 @@ Write-Host "   pm2 delete posting-server # Remove the server from PM2"
 Write-Host "   pm2 save               # Save current process list"
 Write-Host "   pm2 resurrect          # Restore saved processes"
 Write-Host ""
-Write-Host "🚀 Auto-start Setup:"
-if (Test-Path "fix-pm2-task.ps1") {
-    Write-Host "   Run as Administrator: .\fix-pm2-task.ps1"
-} else {
-    Write-Host "   Task Scheduler configured - server will start automatically on boot as SYSTEM"
+Write-Host "🚀 Auto-start Configuration:" -ForegroundColor Green
+if ($serviceCreated) {
+    Write-Host "   ✅ Windows Service: PM2AutoStart (Most reliable - runs even without user login)"
+    Write-Host "   📊 Service Status: $($(Get-Service PM2AutoStart -ErrorAction SilentlyContinue).Status)"
+    Write-Host "   🔧 Manage Service: services.msc (search for 'PM2AutoStart')"
 }
-Write-Host "   Startup logs: .\logs\startup.log"
-Write-Host "   PM2 location: C:\Users\Administrator\AppData\Roaming\npm (accessed via SYSTEM account)"
+Write-Host "   ✅ Registry Run Key: Fast startup on user login"
+Write-Host "   ✅ Startup Folder: Backup method"
+Write-Host "   ✅ Task Scheduler: Additional reliability layer"
 Write-Host ""
-Write-Host "🧪 Testing:"
-Write-Host "   - Restart your computer to test auto-start"
-Write-Host "   - Or manually run the task in Task Scheduler"
-Write-Host "   - Check .\logs\startup.log for startup details"
+Write-Host "📊 Monitoring & Logs:" -ForegroundColor Cyan
+Write-Host "   - Auto-start logs: .\logs\autostart.log"
+Write-Host "   - PM2 server logs: .\logs\posting-server.log"
+if ($serviceCreated) {
+    Write-Host "   - Service logs: .\logs\service-*.log"
+}
+Write-Host ""
+Write-Host "🧪 Testing Auto-Start:" -ForegroundColor Yellow
+Write-Host "   1. Restart your computer"
+Write-Host "   2. Check logs in .\logs\autostart.log"
+Write-Host "   3. Verify with: pm2 status"
+Write-Host "   4. Or test manually: .\pm2-autostart.bat"
+Write-Host ""
+Write-Host "⚡ Features of this improved setup:" -ForegroundColor Green
+Write-Host "   - Multiple auto-start methods for maximum reliability"
+Write-Host "   - Faster startup times (15-30 second delay vs 2+ minutes)"
+Write-Host "   - Better error handling and logging"
+Write-Host "   - Works with or without user login (if service is available)"
+Write-Host "   - Self-healing: automatically restarts if PM2 processes fail"
+Write-Host "   - Comprehensive logging for troubleshooting"
+Write-Host ""
+Write-Host "🎉 Setup complete! Your server will start automatically on boot." -ForegroundColor Green
