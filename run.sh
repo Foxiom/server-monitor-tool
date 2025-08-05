@@ -2,7 +2,8 @@
 
 # Enhanced cross-platform server setup script
 # Compatible with all major Linux distributions
-# Version 2.0 - Improved error handling and reliability
+# Version 2.1 - Added NVM support for Node.js installation
+# This version uses NVM to avoid dependency conflicts
 
 # Exit on error, but allow certain commands to fail without stopping the script
 set -e
@@ -13,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMP_DIR=""
 LOCK_FILE="/tmp/server_setup.lock"
 LOG_FILE="/tmp/server_setup.log"
+NVM_VERSION="v0.39.7"  # Latest stable NVM version
 
 # Function to log messages
 log_message() {
@@ -275,6 +277,70 @@ update_repositories() {
   done
 }
 
+# Function to source NVM
+source_nvm() {
+  # Source nvm if available
+  if [ -s "$HOME/.nvm/nvm.sh" ]; then
+    log_message "INFO" "Sourcing NVM from ~/.nvm/nvm.sh"
+    source "$HOME/.nvm/nvm.sh"
+  elif [ -s "/usr/local/nvm/nvm.sh" ]; then
+    log_message "INFO" "Sourcing NVM from /usr/local/nvm/nvm.sh"
+    source "/usr/local/nvm/nvm.sh"
+  fi
+  
+  # Also try to source bash completion
+  if [ -s "$HOME/.nvm/bash_completion" ]; then
+    source "$HOME/.nvm/bash_completion"
+  fi
+  
+  # Export NVM_DIR if not set
+  if [ -z "$NVM_DIR" ]; then
+    if [ -d "$HOME/.nvm" ]; then
+      export NVM_DIR="$HOME/.nvm"
+    fi
+  fi
+}
+
+# Function to install NVM
+install_nvm() {
+  print_header "Installing NVM (Node Version Manager)"
+  
+  log_message "INFO" "Installing NVM version $NVM_VERSION"
+  echo "📦 Installing NVM (Node Version Manager) $NVM_VERSION..."
+  
+  # Remove existing NVM installation if it exists
+  if [ -d "$HOME/.nvm" ]; then
+    log_message "INFO" "Removing existing NVM installation"
+    echo "🗑️ Removing existing NVM installation..."
+    rm -rf "$HOME/.nvm"
+  fi
+  
+  # Install NVM using the official install script
+  if curl -o- "https://raw.githubusercontent.com/nvm-sh/nvm/$NVM_VERSION/install.sh" | bash; then
+    log_message "INFO" "NVM installation script completed"
+    echo "✅ NVM installation script completed"
+  else
+    log_message "ERROR" "Failed to install NVM"
+    echo "❌ Failed to install NVM"
+    exit 1
+  fi
+  
+  # Source NVM immediately
+  export NVM_DIR="$HOME/.nvm"
+  source_nvm
+  
+  # Verify NVM installation
+  if command_exists nvm; then
+    local nvm_version=$(nvm --version)
+    log_message "INFO" "NVM $nvm_version installed successfully"
+    echo "✅ NVM $nvm_version installed successfully"
+  else
+    log_message "ERROR" "NVM installation verification failed"
+    echo "❌ NVM installation verification failed"
+    exit 1
+  fi
+}
+
 # Function to check Node.js version
 check_nodejs_version() {
   if command_exists node; then
@@ -297,156 +363,60 @@ check_nodejs_version() {
   fi
 }
 
-# Function to remove old Node.js installation
-remove_old_nodejs() {
-  local distro="$1"
+# Function to install Node.js using NVM
+install_nodejs_nvm() {
+  print_header "Installing Node.js ${REQUIRED_NODE_MAJOR}.x using NVM"
   
-  log_message "INFO" "Removing old Node.js installation"
-  echo "🗑️ Removing old Node.js installation..."
+  # Make sure NVM is sourced
+  source_nvm
   
-  case "$distro" in
-    debian)
-      run_command_continue sudo apt-get remove -y nodejs npm
-      run_command_continue sudo apt-get autoremove -y
-      ;;
-    redhat)
-      if command_exists dnf; then
-        run_command_continue sudo dnf remove -y nodejs npm
-      else
-        run_command_continue sudo yum remove -y nodejs npm
-      fi
-      ;;
-    suse)
-      run_command_continue sudo zypper remove -y nodejs npm
-      ;;
-    arch)
-      run_command_continue sudo pacman -Rs nodejs npm --noconfirm
-      ;;
-    alpine)
-      run_command_continue sudo apk del nodejs npm
-      ;;
-  esac
-  
-  # Remove NodeSource repository if it exists
-  sudo rm -f /etc/apt/sources.list.d/nodesource.list 2>/dev/null || true
-  sudo rm -f /etc/yum.repos.d/nodesource*.repo 2>/dev/null || true
-  
-  # Clear npm cache and remove global packages
-  rm -rf ~/.npm 2>/dev/null || true
-  sudo rm -rf /usr/local/lib/node_modules 2>/dev/null || true
-}
-
-# Function to install Node.js using NodeSource
-install_nodejs_nodesource() {
-  local distro="$1"
-  
-  log_message "INFO" "Installing Node.js ${REQUIRED_NODE_MAJOR}.x via NodeSource"
-  echo "📦 Installing Node.js ${REQUIRED_NODE_MAJOR}.x via NodeSource..."
-  
-  case "$distro" in
-    debian)
-      if curl -fsSL https://deb.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x | sudo -E bash - && \
-         resolve_package_lock "$distro" && \
-         run_command sudo apt-get install -y nodejs; then
-        return 0
-      fi
-      ;;
-    redhat)
-      if curl -fsSL https://rpm.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x | sudo bash -; then
-        if command_exists dnf; then
-          run_command sudo dnf install -y nodejs
-        else
-          run_command sudo yum install -y nodejs
-        fi
-        return 0
-      fi
-      ;;
-    *)
-      log_message "WARN" "NodeSource installation not supported for this distribution"
-      echo "❌ NodeSource installation not supported for this distribution"
-      return 1
-      ;;
-  esac
-}
-
-# Function to install Node.js using package manager
-install_nodejs_package_manager() {
-  local distro="$1"
-  
-  log_message "INFO" "Installing Node.js via system package manager"
-  echo "📦 Installing Node.js via system package manager..."
-  
-  case "$distro" in
-    debian)
-      resolve_package_lock "$distro"
-      run_command sudo apt-get install -y nodejs npm
-      ;;
-    redhat)
-      if command_exists dnf; then
-        run_command sudo dnf install -y nodejs npm
-      else
-        run_command sudo yum install -y nodejs npm
-      fi
-      ;;
-    suse)
-      run_command sudo zypper install -y nodejs npm
-      ;;
-    arch)
-      run_command sudo pacman -S nodejs npm --noconfirm
-      ;;
-    alpine)
-      run_command sudo apk add nodejs npm
-      ;;
-    macos)
-      if command_exists brew; then
-        run_command brew install node
-      else
-        log_message "ERROR" "Homebrew not found on macOS"
-        echo "❌ Homebrew not found. Please install Node.js manually from https://nodejs.org/"
-        return 1
-      fi
-      ;;
-    *)
-      log_message "ERROR" "Unsupported distribution for automatic Node.js installation"
-      echo "❌ Unsupported distribution for automatic Node.js installation"
-      return 1
-      ;;
-  esac
-}
-
-# Function to install Node.js
-install_nodejs() {
-  local distro="$1"
-  
-  print_header "Installing Node.js ${REQUIRED_NODE_MAJOR}.x"
-  
-  # Remove old Node.js if it exists
-  if command_exists node; then
-    remove_old_nodejs "$distro"
+  # Verify NVM is available
+  if ! command_exists nvm; then
+    log_message "ERROR" "NVM is not available"
+    echo "❌ NVM is not available"
+    exit 1
   fi
   
-  # Try NodeSource first (provides latest versions)
-  if [[ "$distro" == "debian" || "$distro" == "redhat" ]]; then
-    if install_nodejs_nodesource "$distro"; then
-      log_message "INFO" "Node.js installed successfully via NodeSource"
-      echo "✅ Node.js installed successfully via NodeSource"
-    else
-      log_message "WARN" "NodeSource installation failed, trying package manager"
-      echo "⚠️ NodeSource installation failed, trying package manager..."
-      install_nodejs_package_manager "$distro"
-    fi
+  log_message "INFO" "Installing Node.js ${REQUIRED_NODE_MAJOR}.x using NVM"
+  echo "📦 Installing Node.js ${REQUIRED_NODE_MAJOR}.x using NVM..."
+  
+  # Install the latest LTS version of the required major version
+  if nvm install ${REQUIRED_NODE_MAJOR} --lts; then
+    log_message "INFO" "Node.js installation completed"
+    echo "✅ Node.js installation completed"
   else
-    install_nodejs_package_manager "$distro"
+    log_message "ERROR" "Failed to install Node.js with NVM"
+    echo "❌ Failed to install Node.js with NVM"
+    exit 1
+  fi
+  
+  # Use the installed version
+  if nvm use ${REQUIRED_NODE_MAJOR}; then
+    log_message "INFO" "Switched to Node.js ${REQUIRED_NODE_MAJOR}.x"
+    echo "✅ Switched to Node.js ${REQUIRED_NODE_MAJOR}.x"
+  else
+    log_message "ERROR" "Failed to switch to Node.js ${REQUIRED_NODE_MAJOR}.x"
+    echo "❌ Failed to switch to Node.js ${REQUIRED_NODE_MAJOR}.x"
+    exit 1
+  fi
+  
+  # Set as default
+  if nvm alias default ${REQUIRED_NODE_MAJOR}; then
+    log_message "INFO" "Set Node.js ${REQUIRED_NODE_MAJOR}.x as default"
+    echo "✅ Set Node.js ${REQUIRED_NODE_MAJOR}.x as default"
+  else
+    log_message "WARN" "Failed to set Node.js ${REQUIRED_NODE_MAJOR}.x as default"
+    echo "⚠️ Failed to set Node.js ${REQUIRED_NODE_MAJOR}.x as default"
   fi
   
   # Verify installation
   if ! command_exists node || ! command_exists npm; then
-    log_message "ERROR" "Failed to install Node.js"
-    echo "❌ Failed to install Node.js. Please install manually from https://nodejs.org/"
+    log_message "ERROR" "Node.js or npm not available after installation"
+    echo "❌ Node.js or npm not available after installation"
     exit 1
   fi
   
-  # Check version again
+  # Check version
   if ! check_nodejs_version; then
     log_message "ERROR" "Installed Node.js version is still incompatible"
     echo "❌ Installed Node.js version is still incompatible"
@@ -454,8 +424,61 @@ install_nodejs() {
   fi
   
   local installed_version=$(node -v)
-  log_message "INFO" "Successfully installed Node.js $installed_version"
-  echo "✅ Successfully installed Node.js $installed_version"
+  local npm_version=$(npm -v)
+  log_message "INFO" "Successfully installed Node.js $installed_version with npm $npm_version"
+  echo "✅ Successfully installed Node.js $installed_version with npm $npm_version"
+}
+
+# Function to ensure Node.js is available in current session
+ensure_nodejs_available() {
+  # Source NVM to make sure Node.js is available
+  source_nvm
+  
+  # If Node.js is not available, try to use the default version
+  if ! command_exists node; then
+    log_message "INFO" "Node.js not in PATH, trying to load default version"
+    echo "🔄 Loading Node.js..."
+    
+    # Try to use default version
+    if command_exists nvm; then
+      nvm use default 2>/dev/null || nvm use ${REQUIRED_NODE_MAJOR} 2>/dev/null || true
+    fi
+  fi
+  
+  # Final check
+  if ! command_exists node || ! command_exists npm; then
+    log_message "ERROR" "Node.js or npm still not available"
+    echo "❌ Node.js or npm still not available"
+    echo "🔧 Please run: source ~/.bashrc && nvm use default"
+    exit 1
+  fi
+}
+
+# Function to install Node.js (main function)
+install_nodejs() {
+  # Check if Node.js is already installed and compatible
+  if command_exists node && check_nodejs_version; then
+    log_message "INFO" "Compatible Node.js already installed"
+    echo "✅ Node.js is already installed with compatible version"
+    return 0
+  fi
+  
+  # Check if NVM is installed
+  source_nvm
+  if ! command_exists nvm; then
+    install_nvm
+    source_nvm
+  else
+    local nvm_version=$(nvm --version)
+    log_message "INFO" "NVM $nvm_version is already installed"
+    echo "✅ NVM $nvm_version is already installed"
+  fi
+  
+  # Install Node.js using NVM
+  install_nodejs_nvm
+  
+  # Ensure Node.js is available in current session
+  ensure_nodejs_available
 }
 
 # Function to install Git
@@ -514,6 +537,9 @@ install_git() {
 install_pm2() {
   print_header "Installing PM2"
   
+  # Ensure Node.js is available
+  ensure_nodejs_available
+  
   log_message "INFO" "Installing PM2 globally"
   echo "📦 Installing PM2 globally..."
   
@@ -524,7 +550,7 @@ install_pm2() {
   
   # Function to try different installation methods
   try_pm2_install() {
-    local methods=("npm install -g pm2" "sudo npm install -g pm2" "npm install -g pm2 --unsafe-perm")
+    local methods=("npm install -g pm2" "npm install -g pm2 --unsafe-perm")
     
     for method in "${methods[@]}"; do
       log_message "INFO" "Trying PM2 installation with: $method"
@@ -563,7 +589,12 @@ install_pm2() {
   
   # Add to PATH temporarily and permanently
   export PATH=~/.npm-global/bin:$PATH
-  echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+  
+  # Add to bashrc if not already there
+  if ! grep -q "~/.npm-global/bin" ~/.bashrc 2>/dev/null; then
+    echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+    log_message "INFO" "Added npm global bin to PATH in ~/.bashrc"
+  fi
   
   # Try installing again with custom prefix
   if npm install -g pm2; then
@@ -589,6 +620,9 @@ install_pm2() {
 # Function to setup posting server
 setup_posting_server() {
   print_header "Setting up Posting Server"
+  
+  # Ensure Node.js is available
+  ensure_nodejs_available
   
   # Remove existing posting_server directory if it exists
   if [ -d "posting_server" ]; then
@@ -683,6 +717,9 @@ setup_posting_server() {
 # Enhanced function to start server with PM2
 start_server_pm2() {
   print_header "Starting Server with PM2"
+  
+  # Ensure Node.js and PM2 are available
+  ensure_nodejs_available
   
   # Stop any existing process
   if pm2 list | grep -q "posting-server"; then
@@ -845,11 +882,77 @@ setup_log_rotation() {
   fi
 }
 
+# Function to create environment setup script
+create_environment_script() {
+  log_message "INFO" "Creating environment setup script"
+  echo "📄 Creating environment setup script..."
+  
+  cat > setup_environment.sh << 'EOF'
+#!/bin/bash
+# Environment setup script for posting server
+# Run this script if Node.js or PM2 are not available in your session
+
+echo "🔧 Setting up Node.js environment..."
+
+# Source NVM
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+  source "$HOME/.nvm/nvm.sh"
+  echo "✅ NVM sourced from ~/.nvm/nvm.sh"
+elif [ -s "/usr/local/nvm/nvm.sh" ]; then
+  source "/usr/local/nvm/nvm.sh"
+  echo "✅ NVM sourced from /usr/local/nvm/nvm.sh"
+else
+  echo "❌ NVM not found"
+  exit 1
+fi
+
+# Source bash completion
+if [ -s "$HOME/.nvm/bash_completion" ]; then
+  source "$HOME/.nvm/bash_completion"
+fi
+
+# Set NVM_DIR if not set
+if [ -z "$NVM_DIR" ]; then
+  if [ -d "$HOME/.nvm" ]; then
+    export NVM_DIR="$HOME/.nvm"
+  fi
+fi
+
+# Use the default Node.js version
+if command -v nvm >/dev/null 2>&1; then
+  nvm use default 2>/dev/null || nvm use 18 2>/dev/null || true
+  echo "✅ Node.js version: $(node -v 2>/dev/null || echo 'Not available')"
+  echo "✅ npm version: $(npm -v 2>/dev/null || echo 'Not available')"
+  echo "✅ PM2 available: $(command -v pm2 >/dev/null 2>&1 && echo 'Yes' || echo 'No')"
+else
+  echo "❌ NVM command not found"
+  exit 1
+fi
+
+# Add npm global bin to PATH if not already there
+if [ -d "$HOME/.npm-global/bin" ] && [[ ":$PATH:" != *":$HOME/.npm-global/bin:"* ]]; then
+  export PATH="$HOME/.npm-global/bin:$PATH"
+  echo "✅ Added npm global bin to PATH"
+fi
+
+echo "🎉 Environment setup complete!"
+echo "📋 You can now use: node, npm, pm2"
+EOF
+  
+  chmod +x setup_environment.sh
+  echo "✅ Created setup_environment.sh for environment management"
+}
+
 # Function to display final status
 display_final_status() {
   print_header "Installation Complete"
   
   echo "✅ Server installation completed successfully!"
+  echo ""
+  echo "🔧 Node.js Installation Method: NVM (Node Version Manager)"
+  echo "   - This avoids dependency conflicts with system packages"
+  echo "   - Node.js version: $(node -v 2>/dev/null || echo 'Not in current PATH')"
+  echo "   - npm version: $(npm -v 2>/dev/null || echo 'Not in current PATH')"
   echo ""
   echo "📁 Posting server structure:"
   echo "   - config/"
@@ -868,23 +971,42 @@ display_final_status() {
   echo "   pm2 delete posting-server # Remove from PM2"
   echo "   pm2 monit                 # Monitor server resources"
   echo ""
+  echo "🔧 Environment Management:"
+  echo "   source ~/.bashrc          # Reload shell environment"
+  echo "   ./setup_environment.sh    # Setup Node.js environment in current session"
+  echo "   nvm use default           # Switch to default Node.js version"
+  echo "   nvm list                  # List installed Node.js versions"
+  echo ""
   echo "🔧 Troubleshooting Commands:"
   echo "   pm2 flush                 # Clear all logs"
   echo "   pm2 reload posting-server # Graceful reload"
   echo "   pm2 reset posting-server  # Reset restart counters"
+  echo "   source ~/.nvm/nvm.sh      # Manually source NVM"
   echo ""
   echo "📊 Current Status:"
-  pm2 status
+  
+  # Ensure environment is loaded for status check
+  source_nvm
+  ensure_nodejs_available 2>/dev/null || true
+  
+  if command_exists pm2; then
+    pm2 status
+  else
+    echo "   ⚠️ PM2 not available in current session"
+    echo "   🔧 Run: source ~/.bashrc or ./setup_environment.sh"
+  fi
   
   # Additional health checks
   echo ""
   echo "🏥 Health Check:"
-  if pm2 list | grep -q "posting-server.*online"; then
+  if command_exists pm2 && pm2 list | grep -q "posting-server.*online"; then
     echo "   ✅ Server Status: ONLINE"
-  elif pm2 list | grep -q "posting-server.*stopped"; then
+  elif command_exists pm2 && pm2 list | grep -q "posting-server.*stopped"; then
     echo "   ⚠️ Server Status: STOPPED (run 'pm2 restart posting-server')"
-  else
+  elif command_exists pm2; then
     echo "   ❌ Server Status: NOT FOUND"
+  else
+    echo "   ⚠️ Server Status: UNKNOWN (PM2 not available in current session)"
   fi
   
   if [ -f "posting_server/server.js" ]; then
@@ -899,12 +1021,29 @@ display_final_status() {
     echo "   ❌ Log Directory: Missing"
   fi
   
+  if command_exists nvm; then
+    echo "   ✅ NVM: Available"
+  else
+    echo "   ⚠️ NVM: Not available in current session"
+  fi
+  
+  if command_exists node; then
+    echo "   ✅ Node.js: $(node -v)"
+  else
+    echo "   ⚠️ Node.js: Not available in current session"
+  fi
+  
   echo ""
   echo "📝 Log Files Location:"
   echo "   - Application logs: logs/posting-server.log"
   echo "   - Error logs: logs/posting-server-error.log"
   echo "   - Output logs: logs/posting-server-out.log"
   echo "   - Setup log: $LOG_FILE"
+  echo ""
+  echo "⚠️ IMPORTANT: If Node.js/PM2 commands don't work:"
+  echo "   1. Run: source ~/.bashrc"
+  echo "   2. Or run: ./setup_environment.sh"
+  echo "   3. Or open a new terminal session"
 }
 
 # Function to perform post-installation checks
@@ -913,28 +1052,36 @@ post_installation_checks() {
   
   local issues_found=false
   
+  # Source environment for checks
+  source_nvm 2>/dev/null || true
+  
+  # Check NVM
+  if command_exists nvm; then
+    echo "✅ NVM: $(nvm --version)"
+  else
+    echo "❌ NVM: Not properly installed"
+    issues_found=true
+  fi
+  
   # Check Node.js
-  if command_exists node && check_nodejs_version; then
+  if command_exists node && check_nodejs_version 2>/dev/null; then
     echo "✅ Node.js: $(node -v)"
   else
-    echo "❌ Node.js: Not properly installed"
-    issues_found=true
+    echo "⚠️ Node.js: Not available in current session (may need to source environment)"
   fi
   
   # Check npm
   if command_exists npm; then
     echo "✅ npm: $(npm -v)"
   else
-    echo "❌ npm: Not available"
-    issues_found=true
+    echo "⚠️ npm: Not available in current session"
   fi
   
   # Check PM2
   if command_exists pm2; then
     echo "✅ PM2: $(pm2 -v)"
   else
-    echo "❌ PM2: Not properly installed"
-    issues_found=true
+    echo "⚠️ PM2: Not available in current session"
   fi
   
   # Check Git
@@ -953,26 +1100,34 @@ post_installation_checks() {
     issues_found=true
   fi
   
-  # Check server status
+  # Check server status (if PM2 is available)
   sleep 2
-  if pm2 list | grep -q "posting-server"; then
-    if pm2 list | grep -q "posting-server.*online"; then
-      echo "✅ Server status: Online"
+  if command_exists pm2; then
+    if pm2 list | grep -q "posting-server"; then
+      if pm2 list | grep -q "posting-server.*online"; then
+        echo "✅ Server status: Online"
+      else
+        echo "⚠️ Server status: Not online (may need restart)"
+      fi
     else
-      echo "⚠️ Server status: Not online (may need restart)"
+      echo "❌ Server status: Not found in PM2"
+      issues_found=true
     fi
   else
-    echo "❌ Server status: Not found in PM2"
-    issues_found=true
+    echo "⚠️ Server status: Cannot check (PM2 not in current session)"
   fi
   
   if [ "$issues_found" = true ]; then
     echo ""
     echo "⚠️ Some issues were detected. Check the items marked with ❌"
-    echo "📋 You may need to run some commands manually or restart the server"
+    echo "📋 Most environment issues can be resolved by:"
+    echo "   1. Opening a new terminal session, or"
+    echo "   2. Running: source ~/.bashrc"
+    echo "   3. Running: ./setup_environment.sh"
   else
     echo ""
-    echo "🎉 All post-installation checks passed!"
+    echo "🎉 All critical components are properly installed!"
+    echo "ℹ️ If commands are not available, restart your terminal or source the environment"
   fi
 }
 
@@ -983,6 +1138,29 @@ create_restart_script() {
   cat > restart_server.sh << 'EOF'
 #!/bin/bash
 echo "🔄 Restarting posting server..."
+
+# Source NVM environment
+if [ -s "$HOME/.nvm/nvm.sh" ]; then
+  source "$HOME/.nvm/nvm.sh"
+fi
+
+# Use default Node.js version
+if command -v nvm >/dev/null 2>&1; then
+  nvm use default 2>/dev/null || nvm use 18 2>/dev/null || true
+fi
+
+# Add npm global to PATH if exists
+if [ -d "$HOME/.npm-global/bin" ]; then
+  export PATH="$HOME/.npm-global/bin:$PATH"
+fi
+
+# Check if PM2 is available
+if ! command -v pm2 >/dev/null 2>&1; then
+  echo "❌ PM2 not found. Please run: source ~/.bashrc or ./setup_environment.sh"
+  exit 1
+fi
+
+# Restart the server
 pm2 restart posting-server
 echo "⏳ Waiting for server to start..."
 sleep 5
@@ -1002,8 +1180,9 @@ main() {
   # Create lock file
   create_lock
   
-  print_header "Enhanced Cross-Platform Server Setup Script v2.0"
+  print_header "Enhanced Cross-Platform Server Setup Script v2.1 (NVM Edition)"
   echo "🐧 Detected OS: $OSTYPE"
+  echo "🚀 This version uses NVM to avoid dependency conflicts!"
   
   # Detect distribution
   local distro=$(detect_distro)
@@ -1023,37 +1202,22 @@ main() {
     fi
   fi
   
-  # Update repositories
+  # Update repositories (needed for Git and other tools)
   update_repositories "$distro"
   
   # Check and install dependencies
   print_header "Checking Dependencies"
   
-  # Check Node.js
-  if ! command_exists node || ! check_nodejs_version; then
-    install_nodejs "$distro"
-  else
-    echo "✅ Node.js is already installed with compatible version"
-    log_message "INFO" "Node.js already installed with compatible version"
-  fi
-  
-  # Check npm
-  if ! command_exists npm; then
-    log_message "ERROR" "npm is not available after Node.js installation"
-    echo "❌ npm is not available after Node.js installation"
-    exit 1
-  else
-    echo "✅ npm is available"
-    log_message "INFO" "npm is available"
-  fi
-  
-  # Check Git
+  # Check Git first (needed for cloning repository)
   if ! command_exists git; then
     install_git "$distro"
   else
     echo "✅ Git is already installed"
     log_message "INFO" "Git already installed"
   fi
+  
+  # Install Node.js using NVM (this handles both NVM and Node.js installation)
+  install_nodejs
   
   # Check and install PM2
   if ! command_exists pm2; then
@@ -1077,6 +1241,7 @@ main() {
   
   # Create convenience scripts
   create_restart_script
+  create_environment_script
   
   # Perform post-installation checks
   post_installation_checks
@@ -1086,13 +1251,20 @@ main() {
   
   echo ""
   echo "🎉 Setup completed successfully!"
-  echo "🌐 Your posting server is now running and will auto-start on system boot."
+  echo "🌐 Your posting server is now running with Node.js managed by NVM."
   echo "📝 Setup log saved to: $LOG_FILE"
   echo ""
   echo "🚀 Quick Start Commands:"
   echo "   ./restart_server.sh       # Restart the server easily"
+  echo "   ./setup_environment.sh    # Setup environment in current session"
+  echo "   source ~/.bashrc          # Reload shell environment"
   echo "   pm2 monit                 # Monitor server performance"
   echo "   tail -f logs/*.log        # Watch live logs"
+  echo ""
+  echo "💡 If commands don't work immediately:"
+  echo "   1. Open a new terminal session, or"
+  echo "   2. Run: source ~/.bashrc"
+  echo "   3. Run: ./setup_environment.sh"
   
   log_message "INFO" "Setup completed successfully"
 }
@@ -1101,8 +1273,9 @@ main() {
 preflight_checks() {
   # Check if running as root (not recommended for some operations)
   if [ "$EUID" -eq 0 ]; then
-    echo "⚠️ Running as root detected. Some npm operations work better with a regular user."
-    echo "🔄 Consider running this script as a regular user with sudo privileges."
+    echo "⚠️ Running as root detected."
+    echo "🔄 NVM installation works better with a regular user."
+    echo "💡 Consider running this script as a regular user with sudo privileges."
     read -p "Continue anyway? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -1132,8 +1305,14 @@ preflight_checks() {
   # Check if curl is available
   if ! command_exists curl; then
     echo "❌ curl is required but not installed. Please install curl first."
+    echo "📋 Install curl with:"
+    echo "   Ubuntu/Debian: sudo apt-get install curl"
+    echo "   CentOS/RHEL: sudo yum install curl"
+    echo "   Fedora: sudo dnf install curl"
     exit 1
   fi
+  
+  echo "✅ Pre-flight checks passed!"
 }
 
 # Run preflight checks
