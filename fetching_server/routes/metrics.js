@@ -208,7 +208,7 @@ router.get("/servers", authenticateToken, async (req, res) => {
     }
     const servers = await Device.find(conditions);
     const serversWithMetrics = [];
-    const thresholdTime = new Date(Date.now() - 1 * 60 * 1000);
+    const thresholdTime = new Date(Date.now() - 1 * 120 * 1000);
 
     for (const server of servers) {
       const deviceId = server.deviceId;
@@ -551,7 +551,7 @@ router.get("/server-status", authenticateToken, async (req, res) => {
       down: { count: 0, deviceIds: [] },
     };
 
-    const thresholdTime = new Date(Date.now() - 1 * 60 * 1000);
+    const thresholdTime = new Date(Date.now() - 1 * 120 * 1000);
 
     for (const server of servers) {
       const deviceId = server.deviceId;

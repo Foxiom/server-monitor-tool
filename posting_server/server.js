@@ -9,7 +9,7 @@ const { collectNetworkMetrics } = require("./utils/networkMetrics");
 
 const app = express();
 const port = 3000;
-const intervalInSeconds = 60;
+const intervalInSeconds = 120;
 
 app.use(cors());
 app.use(express.json());
