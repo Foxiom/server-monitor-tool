@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
-const MONGODB_URI = 'mongodb+srv://foxiomdevelopers:j86D1QXz6UYeH1Lq@testcluster.qqvseae.mongodb.net/server-monitor';
+// const MONGODB_URI = 'mongodb+srv://foxiomdevelopers:j86D1QXz6UYeH1Lq@testcluster.qqvseae.mongodb.net/server-monitor';
+const MONGODB_URI = 'mongodb://myappuser:appsecure123@mongodb007.hostcarts.digital:27017/server-monitor';
 
 async function connectToMongoDB() {
     try {
