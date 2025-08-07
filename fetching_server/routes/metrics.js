@@ -666,6 +666,43 @@ router.get("/server-status", authenticateToken, async (req, res) => {
 });
 
 // Delete server and all related metrics data
+router.put("/servers/:deviceId", authenticateToken, async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+    const {name}= req.body;
+    if(!name){
+      return res.status(400).json({
+        success: false,
+        message: "Name is required",
+      });
+    }
+
+    // Find the server first to check if it exists
+    const server = await Device.findOne({ deviceId });
+
+    if (!server) {
+      return res.status(404).json({
+        success: false,
+        message: "Server not found",
+      });
+    }
+
+    // Update the server name
+    await Device.updateOne({ deviceId }, {deviceName: name });
+    
+    res.json({
+      success: true,
+      message: `Server ${deviceId} name updated successfully`,
+    });
+  } catch (error) {
+    console.error("Error updating server name:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to update server name",
+    });
+  }
+});
+// Delete server and all related metrics data
 router.delete("/servers/:deviceId", authenticateToken, async (req, res) => {
   try {
     const { deviceId } = req.params;
