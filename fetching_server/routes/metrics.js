@@ -545,6 +545,7 @@ router.get("/server-status", authenticateToken, async (req, res) => {
   try {
     const servers = await Device.find();
     const statusCategories = {
+      all: { count: servers.length, deviceIds: servers.map((server) => server.deviceId) },
       up: { count: 0, deviceIds: [] },
       trouble: { count: 0, deviceIds: [] },
       critical: { count: 0, deviceIds: [] },

@@ -95,41 +95,54 @@ function Install-Git {
     }
 }
 
-# Function to completely reset PM2
-function Reset-PM2 {
-    Write-Host "🔧 Completely resetting PM2 installation..."
+# Function to safely manage posting-server PM2 process only
+function Manage-PostingServerProcess {
+    Write-Host "🔧 Managing posting-server PM2 process..."
+    
+    if (-not (Command-Exists pm2)) {
+        Write-Host "📦 Installing PM2..."
+        try {
+            npm install -g pm2@latest
+            Write-Host "✅ PM2 installed successfully"
+            
+            # Verify PM2 installation
+            $pm2Version = & pm2 --version
+            Write-Host "📋 PM2 version: $pm2Version"
+        } catch {
+            Write-Host "❌ Failed to install PM2: $($_.Exception.Message)"
+            exit 1
+        }
+    } else {
+        Write-Host "✅ PM2 is already installed"
+        $pm2Version = & pm2 --version
+        Write-Host "📋 PM2 version: $pm2Version"
+    }
+    
     try {
-        # Kill all PM2 processes
-        if (Command-Exists pm2) {
-            Write-Host "🛑 Stopping all PM2 processes..."
-            pm2 kill -s 2>$null
-        }
+        # Initialize PM2 daemon if needed
+        pm2 ping | Out-Null
         
-        # Uninstall PM2 globally
-        Write-Host "🗑️ Uninstalling existing PM2..."
-        npm uninstall -g pm2 2>$null
+        # Check if posting-server process exists and remove it safely
+        Write-Host "🔍 Checking for existing posting-server process..."
+        $existingProcess = $null
         
-        # Clear npm cache
-        Write-Host "🧹 Clearing npm cache..."
-        npm cache clean --force
-        
-        # Remove PM2 directories
-        $pm2Dirs = @(
-            "$env:USERPROFILE\.pm2",
-            "$env:APPDATA\npm\node_modules\pm2",
-            "$env:APPDATA\Roaming\npm\node_modules\pm2"
-        )
-        
-        foreach ($dir in $pm2Dirs) {
-            if (Test-Path $dir) {
-                Write-Host "🗑️ Removing PM2 directory: $dir"
-                Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue
+        # Use pm2 describe to check if process exists (safer than jlist)
+        try {
+            $processInfo = & pm2 describe posting-server 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "⚠️ Found existing posting-server process. Stopping and removing it..."
+                pm2 delete posting-server
+                Write-Host "✅ Existing posting-server process removed"
+            } else {
+                Write-Host "ℹ️ No existing posting-server process found"
             }
+        } catch {
+            Write-Host "ℹ️ No existing posting-server process found"
         }
         
-        Write-Host "✅ PM2 reset completed"
     } catch {
-        Write-Host "⚠️ PM2 reset encountered errors, but continuing..."
+        Write-Host "⚠️ Error managing PM2 processes: $($_.Exception.Message)"
+        Write-Host "ℹ️ Continuing with fresh PM2 setup..."
     }
 }
 
@@ -167,30 +180,20 @@ if (-not (Command-Exists git)) {
     Install-Git
 }
 
-# Reset and reinstall PM2 to fix corruption issues
-Reset-PM2
-
-# Install PM2 with specific version for better stability
-Write-Host "📦 Installing PM2 (latest stable version)..."
-try {
-    npm install -g pm2@latest
-    Write-Host "✅ PM2 installed successfully"
-    
-    # Verify PM2 installation
-    $pm2Version = & pm2 --version
-    Write-Host "📋 PM2 version: $pm2Version"
-} catch {
-    Write-Host "❌ Failed to install PM2: $($_.Exception.Message)"
-    exit 1
-}
+# Safely manage posting-server PM2 process only
+Manage-PostingServerProcess
 
 # Remove existing posting_server directory if it exists, at any cost
 if (Test-Path "posting_server") {
     Write-Host "🗑️  Forcibly removing existing posting_server directory..."
     try {
-        # Stop any PM2 processes that might be using the directory
+        # Stop only posting-server PM2 process if it exists
         if (Command-Exists pm2) {
-            pm2 kill -s
+            try {
+                pm2 delete posting-server 2>$null
+            } catch {
+                # Ignore errors if process doesn't exist
+            }
         }
 
         # Kill any Node.js processes that might be using the directory
@@ -325,23 +328,13 @@ Write-Host "🚀 Setting up posting server with PM2..."
 
 try {
     # Initialize PM2 if needed
-    pm2 ping
-
-    # Check if posting-server process already exists in PM2
-    $pm2List = & pm2 jlist | ConvertFrom-Json
-    $existingProcess = $pm2List | Where-Object { $_.name -eq "posting-server" }
+    pm2 ping | Out-Null
     
-    if ($existingProcess) {
-        Write-Host "⚠️ Process 'posting-server' already exists in PM2. Restarting it..."
-        pm2 restart posting-server --update-env
-        Write-Host "✅ Process 'posting-server' restarted successfully"
-    } else {
-        Write-Host "🆕 Starting new PM2 process 'posting-server'..."
-        pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
-        Write-Host "✅ Process 'posting-server' started successfully"
-    }
+    Write-Host "🆕 Starting new PM2 process 'posting-server'..."
+    pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
+    Write-Host "✅ Process 'posting-server' started successfully"
 
-    # Save PM2 process list
+    # Save PM2 process list (only saves current user processes)
     Write-Host "💾 Saving PM2 process list..."
     pm2 save
     
@@ -369,8 +362,8 @@ $currentDir = Get-Location
 $startupScript = Join-Path $currentDir "pm2-autostart.bat"
 $startupScriptContent = @"
 @echo off
-title PM2 AutoStart Service
-echo Starting PM2 Auto-Start Service...
+title PM2 AutoStart Service - Posting Server
+echo Starting PM2 Auto-Start Service for Posting Server...
 
 REM Set working directory
 cd /d "$currentDir"
@@ -382,7 +375,7 @@ REM Log startup attempt
 echo %DATE% %TIME% - Auto-start service initiated >> "logs\autostart.log"
 
 REM Wait for system to fully boot
-timeout /t 30 /nobreak > nul
+timeout /t 15 /nobreak > nul
 
 REM Set Node.js paths explicitly
 set PATH=%PATH%;C:\Program Files\nodejs;%USERPROFILE%\AppData\Roaming\npm
@@ -392,42 +385,49 @@ where pm2 >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo %DATE% %TIME% - PM2 not found in PATH >> "logs\autostart.log"
     echo PM2 not found, please check installation
-    pause
+    timeout /t 10 /nobreak > nul
     goto :end
 )
 
 echo %DATE% %TIME% - PM2 found, proceeding with startup >> "logs\autostart.log"
 
 REM Initialize PM2 daemon
-pm2 ping >> "logs\autostart.log" 2>&1
-
-REM Try to resurrect saved PM2 processes
-echo Attempting to resurrect PM2 processes...
-pm2 resurrect >> "logs\autostart.log" 2>&1
-
-REM Wait and verify
-timeout /t 10 /nobreak > nul
-
-REM Check if posting-server is running
-pm2 list | findstr "posting-server.*online" > nul
+pm2 ping >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo %DATE% %TIME% - Posting server not running, starting manually >> "logs\autostart.log"
+    echo %DATE% %TIME% - PM2 daemon not responding, attempting restart >> "logs\autostart.log"
+)
+
+REM Check if posting-server is already running
+pm2 describe posting-server >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo %DATE% %TIME% - Posting server already exists, restarting >> "logs\autostart.log"
+    pm2 restart posting-server >> "logs\autostart.log" 2>&1
+) else (
+    echo %DATE% %TIME% - Posting server not found, starting fresh >> "logs\autostart.log"
     
     REM Navigate to posting_server directory and start
     if exist "posting_server\server.js" (
         pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> "logs\autostart.log" 2>&1
-        pm2 save >> "logs\autostart.log" 2>&1
         echo %DATE% %TIME% - Posting server started successfully >> "logs\autostart.log"
     ) else (
         echo %DATE% %TIME% - ERROR: posting_server\server.js not found >> "logs\autostart.log"
+        goto :end
     )
-) else (
-    echo %DATE% %TIME% - Posting server already running >> "logs\autostart.log"
 )
 
-REM Final status
-echo %DATE% %TIME% - Final PM2 status: >> "logs\autostart.log"
-pm2 list >> "logs\autostart.log" 2>&1
+REM Wait for process to stabilize
+timeout /t 5 /nobreak > nul
+
+REM Save PM2 configuration
+pm2 save >> "logs\autostart.log" 2>&1
+
+REM Final status check
+pm2 describe posting-server >> "logs\autostart.log" 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo %DATE% %TIME% - Posting server auto-start completed successfully >> "logs\autostart.log"
+) else (
+    echo %DATE% %TIME% - WARNING: Posting server may not be running properly >> "logs\autostart.log"
+)
 
 :end
 echo %DATE% %TIME% - Auto-start service completed >> "logs\autostart.log"
@@ -439,7 +439,7 @@ Set-Content -Path $startupScript -Value $startupScriptContent -Encoding ASCII
 try {
     Write-Host "🔧 Setting up auto-start registry entry..."
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-    $regName = "PM2AutoStart"
+    $regName = "PM2PostingServerAutoStart"
     
     # Remove existing entry
     Remove-ItemProperty -Path $regPath -Name $regName -ErrorAction SilentlyContinue
@@ -455,35 +455,35 @@ try {
 # Navigate back to posting_server directory for final verification
 Set-Location posting_server
 
-# Verify if the server is running
+# Verify if the server is running using safer method
 Write-Host "🔍 Verifying server status..."
 try {
-    $pm2Status = & pm2 jlist | ConvertFrom-Json
-    $postingServer = $pm2Status | Where-Object { $_.name -eq "posting-server" -and $_.pm2_env.status -eq "online" }
+    # Use pm2 describe instead of jlist to avoid JSON parsing issues
+    $processCheck = & pm2 describe posting-server 2>$null
     
-    if ($postingServer) {
+    if ($LASTEXITCODE -eq 0) {
         Write-Host "✅ Posting server is running!" -ForegroundColor Green
-        Write-Host "📋 Server details:"
-        Write-Host "   - Status: $($postingServer.pm2_env.status)"
-        Write-Host "   - PID: $($postingServer.pid)"
-        Write-Host "   - CPU: $($postingServer.monit.cpu)%"
-        Write-Host "   - Memory: $([math]::Round($postingServer.monit.memory / 1MB, 2)) MB"
+        
+        # Get basic status info using pm2 status
+        Write-Host "📋 Server status:"
+        pm2 status posting-server
     } else {
         Write-Host "⚠️ Posting server is not running. Attempting to start..."
         pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log
         Start-Sleep -Seconds 5
         
-        $pm2Status = & pm2 jlist | ConvertFrom-Json
-        $postingServer = $pm2Status | Where-Object { $_.name -eq "posting-server" -and $_.pm2_env.status -eq "online" }
+        $processCheck = & pm2 describe posting-server 2>$null
         
-        if ($postingServer) {
+        if ($LASTEXITCODE -eq 0) {
             Write-Host "✅ Posting server started successfully!"
+            pm2 status posting-server
         } else {
             Write-Host "❌ Failed to start posting server. Check logs with 'pm2 logs posting-server'." -ForegroundColor Red
         }
     }
 } catch {
     Write-Host "❌ Error checking server status: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "ℹ️ Try running 'pm2 status' manually to check PM2 processes"
 }
 
 # Go back to parent directory for final output
@@ -493,15 +493,17 @@ Write-Host ""
 Write-Host "✅ Server setup completed!" -ForegroundColor Green
 Write-Host ""
 Write-Host "🔧 Troubleshooting Commands:" -ForegroundColor Yellow
-Write-Host "   pm2 status              # Check server status"
-Write-Host "   pm2 logs posting-server # View server logs"
-Write-Host "   pm2 restart posting-server # Restart the server"
-Write-Host "   pm2 delete posting-server  # Remove and restart fresh"
-Write-Host "   node --version          # Check Node.js version"
-Write-Host "   pm2 --version          # Check PM2 version"
+Write-Host "   pm2 status                     # Check all PM2 processes"
+Write-Host "   pm2 describe posting-server    # Detailed info for posting-server"
+Write-Host "   pm2 logs posting-server        # View server logs"
+Write-Host "   pm2 restart posting-server     # Restart only posting-server"
+Write-Host "   pm2 delete posting-server      # Remove only posting-server"
+Write-Host "   node --version                 # Check Node.js version"
+Write-Host "   pm2 --version                  # Check PM2 version"
 Write-Host ""
 Write-Host "📊 Log files:" -ForegroundColor Cyan
 Write-Host "   - Auto-start: .\logs\autostart.log"
 Write-Host "   - Server: .\logs\posting-server.log"
 Write-Host ""
-Write-Host "🎉 Setup complete! Server will auto-start on boot." -ForegroundColor Green
+Write-Host "🎉 Setup complete! Only posting-server will auto-start on boot." -ForegroundColor Green
+Write-Host "ℹ️ Other PM2 applications remain unaffected." -ForegroundColor Cyan
