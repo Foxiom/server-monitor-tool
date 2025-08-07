@@ -1,49 +1,147 @@
 # Exit on error
 $ErrorActionPreference = "Stop"
 
-# Initial cleanup - kill any processes that might interfere
-Write-Host "🔍 Performing initial cleanup check..."
-if (Test-Path "posting_server") {
-    Write-Host "⚠️ Found existing posting_server directory. Performing aggressive cleanup..."
+# Function to perform aggressive cleanup
+function Remove-PostingServerCompletely {
+    param([string]$DirectoryPath = "posting_server")
     
-    # Kill all node processes first
-    Write-Host "🛑 Stopping all Node.js processes..."
-    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Write-Host "🧹 Starting aggressive cleanup of $DirectoryPath..."
     
-    # Stop PM2 posting-server if it exists
-    if (Get-Command pm2 -ErrorAction SilentlyContinue) {
-        Write-Host "🛑 Stopping PM2 posting-server process..."
-        pm2 delete posting-server 2>$null | Out-Null
-    }
-    
-    Start-Sleep -Seconds 3
-    
-    # Try to remove the directory
+    # Step 1: Kill all Node.js processes
+    Write-Host "🛑 Killing all Node.js processes..."
     try {
-        Remove-Item -Recurse -Force "posting_server" -ErrorAction Stop
-        Write-Host "✅ Initial cleanup successful"
+        Get-Process -Name "node" -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "  Killing Node.js process: $($_.Id)"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 2
     } catch {
-        Write-Host "❌ Could not remove existing posting_server directory"
-        Write-Host "🔧 Please manually delete the 'posting_server' folder and restart the script"
-        Write-Host "💡 Tip: Close any running Node.js applications and try again"
-        exit 1
+        Write-Host "⚠️ Some Node.js processes could not be killed: $($_.Exception.Message)"
+    }
+    
+    # Step 2: Stop only posting-server PM2 process (preserve others)
+    if (Get-Command pm2 -ErrorAction SilentlyContinue) {
+        Write-Host "🛑 Stopping posting-server PM2 process only..."
+        try {
+            # Check if posting-server exists and remove only it
+            $postingServerExists = & pm2 describe posting-server 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  Deleting posting-server PM2 process..."
+                pm2 delete posting-server 2>$null | Out-Null
+                pm2 save 2>$null | Out-Null  # Save updated process list
+                Write-Host "✅ posting-server PM2 process removed"
+            } else {
+                Write-Host "ℹ️ No posting-server PM2 process found"
+            }
+            
+            Start-Sleep -Seconds 2
+        } catch {
+            Write-Host "⚠️ PM2 cleanup encountered errors: $($_.Exception.Message)"
+            # Only as absolute last resort, kill PM2 daemon
+            Write-Host "⚠️ Trying nuclear option as last resort..."
+            try {
+                pm2 kill 2>$null | Out-Null
+                Write-Host "⚠️ PM2 daemon killed - other PM2 apps will need manual restart"
+            } catch {}
+        }
+    }
+    
+    # Step 3: Kill processes using the directory
+    if (Test-Path $DirectoryPath) {
+        Write-Host "🔍 Finding processes using the directory..."
+        
+        # Try to use handle.exe if available
+        try {
+            if (Get-Command handle.exe -ErrorAction SilentlyContinue) {
+                $handles = & handle.exe $DirectoryPath 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    $handles | ForEach-Object {
+                        if ($_ -match "pid:\s*(\d+)") {
+                            $handlePid = $matches[1]
+                            try {
+                                Write-Host "  Killing process $handlePid with handle to $DirectoryPath"
+                                Stop-Process -Id $handlePid -Force -ErrorAction SilentlyContinue
+                            } catch {}
+                        }
+                    }
+                }
+            }
+        } catch {}
+        
+        # Alternative: Kill any process with the directory in its path
+        try {
+            Get-Process | Where-Object { 
+                try { 
+                    $_.Path -and $_.Path -like "*$DirectoryPath*" 
+                } catch { 
+                    $false 
+                }
+            } | ForEach-Object {
+                Write-Host "  Killing process with path containing $DirectoryPath : $($_.Id)"
+                Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+        
+        Start-Sleep -Seconds 3
+    }
+    
+    # Step 4: Aggressive directory removal
+    if (Test-Path $DirectoryPath) {
+        Write-Host "🗑️ Attempting to remove directory: $DirectoryPath"
+        
+        try {
+            # Take ownership
+            Write-Host "  Taking ownership..."
+            takeown /F $DirectoryPath /R /D Y 2>$null | Out-Null
+            icacls $DirectoryPath /grant "$($env:USERNAME):F" /T /Q 2>$null | Out-Null
+            
+            # Method 1: PowerShell Remove-Item
+            Write-Host "  Trying PowerShell Remove-Item..."
+            Remove-Item -Recurse -Force $DirectoryPath -ErrorAction Stop
+            Write-Host "✅ Directory removed successfully"
+            return $true
+            
+        } catch {
+            Write-Host "⚠️ PowerShell removal failed: $($_.Exception.Message)"
+            
+            # Method 2: CMD rd command
+            try {
+                Write-Host "  Trying CMD rd command..."
+                cmd /c "rd /s /q `"$DirectoryPath`"" 2>$null
+                if (-not (Test-Path $DirectoryPath)) {
+                    Write-Host "✅ Directory removed with CMD"
+                    return $true
+                }
+            } catch {}
+            
+            # Method 3: Robocopy nuclear option
+            try {
+                Write-Host "  Using robocopy nuclear option..."
+                $emptyDir = Join-Path $env:TEMP "empty_$(Get-Random)"
+                New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+                
+                robocopy $emptyDir $DirectoryPath /MIR /R:0 /W:0 2>$null | Out-Null
+                Remove-Item -Recurse -Force $DirectoryPath -ErrorAction SilentlyContinue
+                Remove-Item -Recurse -Force $emptyDir -ErrorAction SilentlyContinue
+                
+                if (-not (Test-Path $DirectoryPath)) {
+                    Write-Host "✅ Directory removed with robocopy"
+                    return $true
+                }
+            } catch {}
+            
+            Write-Host "❌ All removal methods failed"
+            return $false
+        }
+    } else {
+        Write-Host "ℹ️ Directory $DirectoryPath does not exist"
+        return $true
     }
 }
 
-# Configure TLS 1.2 for compatibility with all Windows versions
-Write-Host "🔒 Configuring TLS 1.2 for secure connections..."
-try {
-    # Force TLS 1.2 for all web requests
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Write-Host "✅ TLS 1.2 configured successfully"
-} catch {
-    Write-Host "⚠️ Failed to configure TLS 1.2: $($_.Exception.Message)"
-    Write-Host "⚠️ This may cause issues with secure downloads. Continuing anyway..."
-}
-
-# Function to clean up on error
-function Cleanup {
-    Write-Host "🧹 Starting cleanup process..."
+# Function to clean up on error (now defined globally)
+function Invoke-ErrorCleanup {
+    Write-Host "🧹 Starting error cleanup process..."
     
     try {
         # Go back to parent directory if we're in posting_server
@@ -53,38 +151,66 @@ function Cleanup {
             Set-Location ..
         }
         
-        if (Test-Path "posting_server") {
-            Write-Host "🗑️ Removing posting_server directory..."
-            Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
-        }
+        # Remove posting_server directory
+        Remove-PostingServerCompletely -DirectoryPath "posting_server" | Out-Null
         
+        # Clean up temp directory if it exists
         if ($env:TEMP_DIR -and (Test-Path $env:TEMP_DIR)) {
             Write-Host "🗑️ Removing temporary directory..."
             Remove-Item -Recurse -Force $env:TEMP_DIR -ErrorAction SilentlyContinue
         }
         
-        Write-Host "✅ Cleanup completed"
+        Write-Host "✅ Error cleanup completed"
     } catch {
-        Write-Host "⚠️ Cleanup encountered errors: $($_.Exception.Message)"
+        Write-Host "⚠️ Error cleanup encountered issues: $($_.Exception.Message)"
     }
     
     Write-Host "❌ Script execution failed. Check the error messages above for details."
     exit 1
 }
 
-# Set up error handling
-$Global:ErrorActionPreference = "Stop"
-trap { Cleanup }
+# Set up error handling with proper function reference
+trap { Invoke-ErrorCleanup }
+
+Write-Host "🔍 Performing initial cleanup check..."
+
+# Perform aggressive cleanup if directory exists
+if (Test-Path "posting_server") {
+    Write-Host "⚠️ Found existing posting_server directory. Performing aggressive cleanup..."
+    
+    $cleanupSuccess = Remove-PostingServerCompletely -DirectoryPath "posting_server"
+    
+    if (-not $cleanupSuccess) {
+        Write-Host "❌ Could not remove existing posting_server directory" -ForegroundColor Red
+        Write-Host "🔧 Manual steps required:" -ForegroundColor Yellow
+        Write-Host "   1. Open Task Manager and kill any Node.js processes" -ForegroundColor Yellow
+        Write-Host "   2. Run 'pm2 kill' to stop all PM2 processes" -ForegroundColor Yellow
+        Write-Host "   3. Restart your computer if necessary" -ForegroundColor Yellow
+        Write-Host "   4. Manually delete the posting_server folder" -ForegroundColor Yellow
+        Write-Host "❌ Please resolve manually and re-run the script" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Configure TLS 1.2 for compatibility with all Windows versions
+Write-Host "🔒 Configuring TLS 1.2 for secure connections..."
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Write-Host "✅ TLS 1.2 configured successfully"
+} catch {
+    Write-Host "⚠️ Failed to configure TLS 1.2: $($_.Exception.Message)"
+    Write-Host "⚠️ This may cause issues with secure downloads. Continuing anyway..."
+}
 
 # Function to check if a command exists
-function Command-Exists {
+function Test-CommandExists {
     param ($command)
     return Get-Command $command -ErrorAction SilentlyContinue
 }
 
 # Function to check if Chocolatey is installed
 function Test-Chocolatey {
-    return (Command-Exists choco)
+    return (Test-CommandExists choco)
 }
 
 # Function to install Chocolatey
@@ -92,15 +218,13 @@ function Install-Chocolatey {
     Write-Host "📦 Installing Chocolatey..."
     try {
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        # Force TLS 1.2 explicitly for Chocolatey installation
         [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
         Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        # Refresh environment variables
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         Write-Host "✅ Chocolatey installed successfully"
     } catch {
         Write-Host "❌ Failed to install Chocolatey: $($_.Exception.Message)"
-        exit 1
+        throw
     }
 }
 
@@ -114,83 +238,29 @@ function Ensure-Chocolatey {
     }
 }
 
-# Function to install Node.js using Chocolatey (LTS version for stability)
+# Function to install Node.js using Chocolatey
 function Install-NodeJs {
     Write-Host "📦 Installing Node.js LTS using Chocolatey..."
     try {
-        # Install specific LTS version for better PM2 compatibility
-        choco install nodejs-lts -y -s https://community.chocolatey.org/api/v2/
-        # Refresh environment variables
+        choco install nodejs-lts -y
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         Write-Host "✅ Node.js LTS installed successfully"
     } catch {
         Write-Host "❌ Failed to install Node.js: $($_.Exception.Message)"
-        exit 1
+        throw
     }
 }
 
-# Function to install Git using Chocolatey (latest stable version)
+# Function to install Git using Chocolatey
 function Install-Git {
-    Write-Host "📦 Installing the latest stable Git using Chocolatey..."
+    Write-Host "📦 Installing Git using Chocolatey..."
     try {
-        choco install git -y -s https://community.chocolatey.org/api/v2/
-        # Refresh environment variables
+        choco install git -y
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         Write-Host "✅ Git installed successfully"
     } catch {
         Write-Host "❌ Failed to install Git: $($_.Exception.Message)"
-        exit 1
-    }
-}
-
-# Function to safely manage posting-server PM2 process only
-function Manage-PostingServerProcess {
-    Write-Host "🔧 Managing posting-server PM2 process..."
-    
-    if (-not (Command-Exists pm2)) {
-        Write-Host "📦 Installing PM2..."
-        try {
-            npm install -g pm2@latest
-            Write-Host "✅ PM2 installed successfully"
-            
-            # Verify PM2 installation
-            $pm2Version = & pm2 --version
-            Write-Host "📋 PM2 version: $pm2Version"
-        } catch {
-            Write-Host "❌ Failed to install PM2: $($_.Exception.Message)"
-            exit 1
-        }
-    } else {
-        Write-Host "✅ PM2 is already installed"
-        $pm2Version = & pm2 --version
-        Write-Host "📋 PM2 version: $pm2Version"
-    }
-    
-    try {
-        # Initialize PM2 daemon if needed
-        pm2 ping | Out-Null
-        
-        # Check if posting-server process exists and remove it safely
-        Write-Host "🔍 Checking for existing posting-server process..."
-        $existingProcess = $null
-        
-        # Use pm2 describe to check if process exists (safer than jlist)
-        try {
-            $processInfo = & pm2 describe posting-server 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "⚠️ Found existing posting-server process. Stopping and removing it..."
-                pm2 delete posting-server
-                Write-Host "✅ Existing posting-server process removed"
-            } else {
-                Write-Host "ℹ️ No existing posting-server process found"
-            }
-        } catch {
-            Write-Host "ℹ️ No existing posting-server process found"
-        }
-        
-    } catch {
-        Write-Host "⚠️ Error managing PM2 processes: $($_.Exception.Message)"
-        Write-Host "ℹ️ Continuing with fresh PM2 setup..."
+        throw
     }
 }
 
@@ -199,12 +269,11 @@ Ensure-Chocolatey
 
 # Check and install Node.js if not present or if version is incompatible
 $nodeInstalled = $false
-if (Command-Exists node) {
+if (Test-CommandExists node) {
     try {
         $nodeVersion = & node --version
         Write-Host "📋 Current Node.js version: $nodeVersion"
         
-        # Check if it's a supported version (v14+)
         $versionNumber = [int]($nodeVersion -replace 'v(\d+).*', '$1')
         if ($versionNumber -ge 14) {
             $nodeInstalled = $true
@@ -223,344 +292,141 @@ if (-not $nodeInstalled) {
 }
 
 # Check and install Git if not present
-if (-not (Command-Exists git)) {
+if (-not (Test-CommandExists git)) {
     Write-Host "❌ Git is not installed."
     Install-Git
 }
 
-# Safely manage posting-server PM2 process only
-Manage-PostingServerProcess
-
-# Remove existing posting_server directory if it exists, at any cost
-if (Test-Path "posting_server") {
-    Write-Host "🗑️  Forcibly removing existing posting_server directory..."
-    try {
-        # Stop only posting-server PM2 process if it exists
-        if (Command-Exists pm2) {
-            Write-Host "🛑 Stopping posting-server PM2 process..."
-            try {
-                pm2 delete posting-server 2>$null
-                Write-Host "✅ PM2 posting-server process stopped"
-            } catch {
-                Write-Host "ℹ️ No PM2 posting-server process found"
-            }
-            
-            # Wait a moment for PM2 to clean up
-            Start-Sleep -Seconds 2
-        }
-
-        # Kill any Node.js processes that might be using the directory
-        Write-Host "🔍 Searching for Node.js processes using posting_server directory..."
-        $processes = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { 
-            try {
-                $_.Path -and ($_.Path -like "*posting_server*" -or $_.WorkingSet -gt 0)
-            } catch {
-                $false
-            }
-        }
-        
-        if ($processes) {
-            Write-Host "🛑 Killing Node.js processes that might be using the directory..."
-            $processes | ForEach-Object {
-                try {
-                    Write-Host "  Killing process $($_.Id) - $($_.ProcessName)"
-                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-                } catch {
-                    Write-Host "  ⚠️ Could not kill process $($_.Id)"
-                }
-            }
-            Start-Sleep -Seconds 3
-        }
-
-        # Kill any processes with handles to files in the directory
-        Write-Host "🔍 Killing processes with open handles to posting_server..."
-        try {
-            $handles = & handle.exe "posting_server" 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                # Extract PIDs from handle output and kill them
-                $handles | ForEach-Object {
-                    if ($_ -match "pid:\s*(\d+)") {
-                        $handlePid = $matches[1]
-                        try {
-                            Stop-Process -Id $handlePid -Force -ErrorAction SilentlyContinue
-                            Write-Host "  Killed process $handlePid with handle to posting_server"
-                        } catch {
-                            # Ignore errors
-                        }
-                    }
-                }
-            }
-        } catch {
-            # Handle.exe might not be available, continue anyway
-        }
-
-        # Use PowerShell to unlock and delete
-        Write-Host "🔓 Taking ownership and setting permissions..."
-        takeown /F "posting_server" /R /D Y | Out-Null
-        icacls "posting_server" /grant "$($env:USERNAME):F" /T /Q | Out-Null
-
-        # Try multiple deletion methods
-        Write-Host "🗑️ Attempting to delete directory..."
-        
-        # Method 1: PowerShell Remove-Item with force
-        try {
-            Remove-Item -Recurse -Force "posting_server" -ErrorAction Stop
-            Write-Host "✅ Successfully removed using PowerShell"
-        } catch {
-            Write-Host "⚠️ PowerShell deletion failed: $($_.Exception.Message)"
-            
-            # Method 2: CMD rd command
-            try {
-                Write-Host "🔄 Trying CMD rd command..."
-                $result = cmd /c "rd /s /q posting_server 2>&1"
-                if (-not (Test-Path "posting_server")) {
-                    Write-Host "✅ Successfully removed using CMD"
-                } else {
-                    Write-Host "⚠️ CMD deletion partially failed"
-                }
-            } catch {
-                Write-Host "⚠️ CMD deletion failed: $($_.Exception.Message)"
-            }
-        }
-
-        # Method 3: Robocopy empty directory (nuclear option)
-        if (Test-Path "posting_server") {
-            Write-Host "🚀 Using robocopy nuclear option..."
-            try {
-                $emptyDir = Join-Path $env:TEMP "empty_$(Get-Random)"
-                New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
-                
-                # Use robocopy to mirror empty directory (effectively deleting everything)
-                robocopy $emptyDir "posting_server" /MIR /R:0 /W:0 | Out-Null
-                
-                # Now try to delete the empty directory
-                Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
-                Remove-Item -Recurse -Force $emptyDir -ErrorAction SilentlyContinue
-                
-                if (-not (Test-Path "posting_server")) {
-                    Write-Host "✅ Successfully removed using robocopy method"
-                }
-            } catch {
-                Write-Host "⚠️ Robocopy method failed: $($_.Exception.Message)"
-            }
-        }
-
-        # Final check and manual intervention message
-        if (Test-Path "posting_server") {
-            Write-Host "❌ All automated deletion methods failed" -ForegroundColor Red
-            Write-Host "🔧 Manual steps required:" -ForegroundColor Yellow
-            Write-Host "   1. Open Task Manager and kill any Node.js processes" -ForegroundColor Yellow
-            Write-Host "   2. Run 'pm2 kill' to stop all PM2 processes" -ForegroundColor Yellow
-            Write-Host "   3. Restart your computer if necessary" -ForegroundColor Yellow
-            Write-Host "   4. Manually delete the posting_server folder" -ForegroundColor Yellow
-            Write-Host "❌ Please resolve manually and re-run the script" -ForegroundColor Red
-            exit 1
-        } else {
-            Write-Host "✅ Successfully removed posting_server directory!"
-        }
-    } catch {
-        Write-Host "❌ Error during removal: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "❌ Please manually delete the posting_server directory and re-run the script" -ForegroundColor Red
-        exit 1
-    }
+# Install/Update PM2
+Write-Host "📦 Installing/updating PM2..."
+try {
+    npm install -g pm2@latest
+    Write-Host "✅ PM2 installed/updated successfully"
+} catch {
+    Write-Host "❌ Failed to install PM2: $($_.Exception.Message)"
+    throw
 }
 
 # Create logs directory if it doesn't exist
-New-Item -ItemType Directory -Force -Path "logs"
+New-Item -ItemType Directory -Force -Path "logs" | Out-Null
 
 # Setup posting server
 Write-Host "🔧 Setting up posting server..."
 
-# Clone the repository to a temporary directory (shallow clone for efficiency)
-Write-Host "⬇️ Downloading complete posting server from GitHub..."
+# Clone the repository to a temporary directory
+Write-Host "⬇️ Downloading posting server from GitHub..."
 $env:TEMP_DIR = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
-New-Item -ItemType Directory -Path $env:TEMP_DIR
+New-Item -ItemType Directory -Path $env:TEMP_DIR | Out-Null
 
 # Ensure TLS 1.2 is set before Git operations
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
-# Try Git clone with multiple attempts and fallback methods
+# Try multiple download methods
 $maxAttempts = 3
 $attempt = 1
-$cloneSuccess = $false
+$downloadSuccess = $false
 
-while (-not $cloneSuccess -and $attempt -le $maxAttempts) {
-    Write-Host "Attempt $attempt of $maxAttempts to clone repository..."
+while (-not $downloadSuccess -and $attempt -le $maxAttempts) {
+    Write-Host "Attempt $attempt of $maxAttempts to download repository..."
     
     try {
-        # First try standard git clone
-        git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $env:TEMP_DIR
-        $cloneSuccess = $true
-        Write-Host "✅ Repository cloned successfully"
-    } catch {
-        if ($attempt -lt $maxAttempts) {
-            Write-Host "⚠️ Clone failed: $($_.Exception.Message). Retrying with alternate method..."
-            
-            # On failure, try with different git config
-            if ($attempt -eq 2) {
-                # Try with PowerShell direct download as last resort
-                try {
-                    $zipUrl = "https://github.com/Foxiom/server-monitor-tool/archive/main.zip"
-                    $zipPath = "$env:TEMP\server-monitor-tool.zip"
-                    
-                    Write-Host "Attempting direct download from $zipUrl"
-                    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-                    
-                    # Extract ZIP file
-                    Write-Host "Extracting ZIP file..."
-                    Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
-                    
-                    # Copy contents to temp directory
-                    Copy-Item -Path "$env:TEMP\server-monitor-tool-main\*" -Destination $env:TEMP_DIR -Recurse -Force
-                    
-                    # Clean up
-                    Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
-                    Remove-Item -Path "$env:TEMP\server-monitor-tool-main" -Recurse -Force -ErrorAction SilentlyContinue
-                    
-                    $cloneSuccess = $true
-                    Write-Host "✅ Repository downloaded successfully via direct download"
-                    break
-                } catch {
-                    Write-Host "⚠️ Direct download failed: $($_.Exception.Message)"
-                }
-            }
+        if ($attempt -eq 1) {
+            # Try Git clone first
+            git clone --depth 1 https://github.com/Foxiom/server-monitor-tool.git $env:TEMP_DIR
         } else {
-            Write-Host "❌ Failed to clone repository after $maxAttempts attempts: $($_.Exception.Message)" -ForegroundColor Red
-            Cleanup
+            # Try direct ZIP download
+            $zipUrl = "https://github.com/Foxiom/server-monitor-tool/archive/main.zip"
+            $zipPath = "$env:TEMP\server-monitor-tool.zip"
+            
+            Write-Host "Attempting direct download from $zipUrl"
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+            
+            # Extract ZIP file
+            Write-Host "Extracting ZIP file..."
+            Expand-Archive -Path $zipPath -DestinationPath $env:TEMP -Force
+            
+            # Copy contents to temp directory
+            Copy-Item -Path "$env:TEMP\server-monitor-tool-main\*" -Destination $env:TEMP_DIR -Recurse -Force
+            
+            # Clean up
+            Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -Path "$env:TEMP\server-monitor-tool-main" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        
+        $downloadSuccess = $true
+        Write-Host "✅ Repository downloaded successfully"
+        
+    } catch {
+        Write-Host "⚠️ Download attempt $attempt failed: $($_.Exception.Message)"
+        if ($attempt -eq $maxAttempts) {
+            throw "Failed to download repository after $maxAttempts attempts"
         }
     }
     $attempt++
 }
 
-# Copy only the posting_server folder to our target location
+# Copy posting_server folder
 Write-Host "📁 Copying posting_server folder..."
-try {
-    if (-not (Test-Path "$env:TEMP_DIR\posting_server")) {
-        Write-Host "❌ Error: posting_server folder not found in downloaded repository"
-        Write-Host "📋 Contents of temp directory:"
-        Get-ChildItem -Path $env:TEMP_DIR -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
-        throw "posting_server folder not found"
-    }
-    
-    Copy-Item -Recurse "$env:TEMP_DIR\posting_server" -Destination "." -Force
-    Write-Host "✅ posting_server folder copied successfully"
-    
-    # Verify the copy
-    if (-not (Test-Path "posting_server")) {
-        throw "Failed to copy posting_server folder to destination"
-    }
-    
-} catch {
-    Write-Host "❌ Failed to copy posting_server folder: $($_.Exception.Message)"
-    Write-Host "📋 Debugging information:"
-    Write-Host "  Temp directory: $env:TEMP_DIR"
-    Write-Host "  Current directory: $(Get-Location)"
-    
-    if (Test-Path $env:TEMP_DIR) {
-        Write-Host "  Temp directory contents:"
-        Get-ChildItem -Path $env:TEMP_DIR | ForEach-Object { Write-Host "    $($_.Name)" }
-    }
-    
-    throw "Copy operation failed"
+if (-not (Test-Path "$env:TEMP_DIR\posting_server")) {
+    Write-Host "❌ Error: posting_server folder not found in downloaded repository"
+    throw "posting_server folder not found"
 }
+
+Copy-Item -Recurse "$env:TEMP_DIR\posting_server" -Destination "." -Force
+Write-Host "✅ posting_server folder copied successfully"
 
 # Clean up temporary directory
 Write-Host "🧹 Cleaning up temporary files..."
-try {
-    Remove-Item -Recurse -Force $env:TEMP_DIR -ErrorAction SilentlyContinue
-    $env:TEMP_DIR = $null
-    Write-Host "✅ Temporary files cleaned up"
-} catch {
-    Write-Host "⚠️ Warning: Could not fully clean up temporary directory: $($_.Exception.Message)"
-}
+Remove-Item -Recurse -Force $env:TEMP_DIR -ErrorAction SilentlyContinue
+$env:TEMP_DIR = $null
 
 # Navigate to posting_server directory
 Write-Host "📂 Navigating to posting_server directory..."
-try {
-    if (-not (Test-Path "posting_server")) {
-        throw "posting_server directory does not exist"
-    }
-    
-    Set-Location posting_server
-    Write-Host "✅ Successfully navigated to posting_server directory"
-    Write-Host "📋 Current location: $(Get-Location)"
-    
-    # Verify we have the required files
-    if (-not (Test-Path "server.js")) {
-        Write-Host "⚠️ Warning: server.js not found in posting_server directory"
-        Write-Host "📋 Contents of posting_server directory:"
-        Get-ChildItem | ForEach-Object { Write-Host "  $($_.Name)" }
-    } else {
-        Write-Host "✅ server.js found in posting_server directory"
-    }
-    
-} catch {
-    Write-Host "❌ Failed to navigate to posting_server directory: $($_.Exception.Message)"
-    Write-Host "📋 Current location: $(Get-Location)"
-    Write-Host "📋 Available directories:"
-    Get-ChildItem -Directory | ForEach-Object { Write-Host "  $($_.Name)" }
-    throw "Navigation failed"
-}
+Set-Location posting_server
 
-# Install posting server dependencies with clean install
+# Install dependencies
 Write-Host "📦 Installing posting server dependencies..."
-try {
-    # Clear any existing node_modules
-    if (Test-Path "node_modules") {
-        Remove-Item -Path "node_modules" -Recurse -Force
-    }
-    
-    # Install dependencies
-    npm install --no-optional --no-audit
-    Write-Host "✅ Dependencies installed successfully"
-} catch {
-    Write-Host "❌ Failed to install dependencies: $($_.Exception.Message)"
-    exit 1
+if (Test-Path "node_modules") {
+    Remove-Item -Path "node_modules" -Recurse -Force
 }
 
-# Set posting server permissions
-Write-Host "🔒 Setting up permissions..."
-icacls "." /grant "Everyone:(OI)(CI)F" /Q
-Get-ChildItem -Filter "*.js" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q }
-Get-ChildItem -Filter "*.json" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q }
-Get-ChildItem -Directory | ForEach-Object { icacls $_.Name /grant "Everyone:(OI)(CI)F" /Q }
-icacls "..\logs" /grant "Everyone:(OI)(CI)F" /Q
+npm install --no-optional --no-audit
+Write-Host "✅ Dependencies installed successfully"
 
-# Start the server using PM2 with better error handling
-Write-Host "🚀 Setting up posting server with PM2..."
+# Set permissions
+Write-Host "🔒 Setting up permissions..."
+icacls "." /grant "Everyone:(OI)(CI)F" /Q | Out-Null
+Get-ChildItem -Filter "*.js" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q | Out-Null }
+Get-ChildItem -Filter "*.json" | ForEach-Object { icacls $_.Name /grant "Everyone:R" /Q | Out-Null }
+Get-ChildItem -Directory | ForEach-Object { icacls $_.Name /grant "Everyone:(OI)(CI)F" /Q | Out-Null }
+icacls "..\logs" /grant "Everyone:(OI)(CI)F" /Q | Out-Null
+
+# Start the server using PM2
+Write-Host "🚀 Starting posting server with PM2..."
 
 try {
-    # Initialize PM2 if needed
+    # Initialize PM2
     pm2 ping | Out-Null
     
-    Write-Host "🆕 Starting new PM2 process 'posting-server'..."
+    # Start the server
     pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log --exp-backoff-restart-delay=100
-    Write-Host "✅ Process 'posting-server' started successfully"
-
-    # Save PM2 process list (only saves current user processes)
-    Write-Host "💾 Saving PM2 process list..."
-    pm2 save
+    Write-Host "✅ Posting server started successfully"
+    
+    # Save PM2 process list
+    pm2 save | Out-Null
     
 } catch {
     Write-Host "❌ Failed to start server with PM2: $($_.Exception.Message)"
-    Write-Host "🔍 Trying to diagnose the issue..."
-    
-    # Show PM2 logs for debugging
-    Write-Host "📋 PM2 Status:"
     pm2 status
-    
-    Write-Host "📋 Recent PM2 logs:"
     pm2 logs --lines 10
-    
-    exit 1
+    throw
 }
 
-# Go back to parent directory for auto-start setup
+# Go back to parent directory
 Set-Location ..
 
-# Create a more robust startup script
+# Create startup script
 Write-Host "🔧 Setting up auto-start mechanism..."
-
 $currentDir = Get-Location
 $startupScript = Join-Path $currentDir "pm2-autostart.bat"
 $startupScriptContent = @"
@@ -568,22 +434,15 @@ $startupScriptContent = @"
 title PM2 AutoStart Service - Posting Server
 echo Starting PM2 Auto-Start Service for Posting Server...
 
-REM Set working directory
 cd /d "$currentDir"
 
-REM Create logs directory if it doesn't exist
 if not exist "logs" mkdir "logs"
-
-REM Log startup attempt
 echo %DATE% %TIME% - Auto-start service initiated >> "logs\autostart.log"
 
-REM Wait for system to fully boot
 timeout /t 15 /nobreak > nul
 
-REM Set Node.js paths explicitly
 set PATH=%PATH%;C:\Program Files\nodejs;%USERPROFILE%\AppData\Roaming\npm
 
-REM Check if PM2 is available
 where pm2 >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
     echo %DATE% %TIME% - PM2 not found in PATH >> "logs\autostart.log"
@@ -592,45 +451,24 @@ if %ERRORLEVEL% NEQ 0 (
     goto :end
 )
 
-echo %DATE% %TIME% - PM2 found, proceeding with startup >> "logs\autostart.log"
-
-REM Initialize PM2 daemon
 pm2 ping >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo %DATE% %TIME% - PM2 daemon not responding, attempting restart >> "logs\autostart.log"
-)
 
-REM Check if posting-server is already running
 pm2 describe posting-server >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
-    echo %DATE% %TIME% - Posting server already exists, restarting >> "logs\autostart.log"
+    echo %DATE% %TIME% - Posting server exists, restarting >> "logs\autostart.log"
     pm2 restart posting-server >> "logs\autostart.log" 2>&1
 ) else (
-    echo %DATE% %TIME% - Posting server not found, starting fresh >> "logs\autostart.log"
-    
-    REM Navigate to posting_server directory and start
+    echo %DATE% %TIME% - Starting posting server >> "logs\autostart.log"
     if exist "posting_server\server.js" (
         pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> "logs\autostart.log" 2>&1
-        echo %DATE% %TIME% - Posting server started successfully >> "logs\autostart.log"
     ) else (
         echo %DATE% %TIME% - ERROR: posting_server\server.js not found >> "logs\autostart.log"
         goto :end
     )
 )
 
-REM Wait for process to stabilize
 timeout /t 5 /nobreak > nul
-
-REM Save PM2 configuration
 pm2 save >> "logs\autostart.log" 2>&1
-
-REM Final status check
-pm2 describe posting-server >> "logs\autostart.log" 2>&1
-if %ERRORLEVEL% EQU 0 (
-    echo %DATE% %TIME% - Posting server auto-start completed successfully >> "logs\autostart.log"
-) else (
-    echo %DATE% %TIME% - WARNING: Posting server may not be running properly >> "logs\autostart.log"
-)
 
 :end
 echo %DATE% %TIME% - Auto-start service completed >> "logs\autostart.log"
@@ -638,16 +476,13 @@ echo %DATE% %TIME% - Auto-start service completed >> "logs\autostart.log"
 
 Set-Content -Path $startupScript -Value $startupScriptContent -Encoding ASCII
 
-# Set up registry run key for auto-start
+# Set up registry auto-start
 try {
     Write-Host "🔧 Setting up auto-start registry entry..."
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     $regName = "PM2PostingServerAutoStart"
     
-    # Remove existing entry
     Remove-ItemProperty -Path $regPath -Name $regName -ErrorAction SilentlyContinue
-    
-    # Add new entry
     Set-ItemProperty -Path $regPath -Name $regName -Value "`"$startupScript`""
     
     Write-Host "✅ Auto-start configured successfully!"
@@ -655,58 +490,37 @@ try {
     Write-Host "⚠️ Failed to configure auto-start: $($_.Exception.Message)"
 }
 
-# Navigate back to posting_server directory for final verification
+# Final verification
 Set-Location posting_server
-
-# Verify if the server is running using safer method
 Write-Host "🔍 Verifying server status..."
+
 try {
-    # Use pm2 describe instead of jlist to avoid JSON parsing issues
     $processCheck = & pm2 describe posting-server 2>$null
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "✅ Posting server is running!" -ForegroundColor Green
-        
-        # Get basic status info using pm2 status
-        Write-Host "📋 Server status:"
         pm2 status posting-server
     } else {
-        Write-Host "⚠️ Posting server is not running. Attempting to start..."
-        pm2 start server.js --name "posting-server" --log ..\logs\posting-server.log
-        Start-Sleep -Seconds 5
-        
-        $processCheck = & pm2 describe posting-server 2>$null
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "✅ Posting server started successfully!"
-            pm2 status posting-server
-        } else {
-            Write-Host "❌ Failed to start posting server. Check logs with 'pm2 logs posting-server'." -ForegroundColor Red
-        }
+        Write-Host "⚠️ Server verification failed. Check with 'pm2 status'"
     }
 } catch {
-    Write-Host "❌ Error checking server status: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "ℹ️ Try running 'pm2 status' manually to check PM2 processes"
+    Write-Host "⚠️ Error checking server status: $($_.Exception.Message)"
 }
 
-# Go back to parent directory for final output
 Set-Location ..
 
 Write-Host ""
 Write-Host "✅ Server setup completed!" -ForegroundColor Green
 Write-Host ""
-Write-Host "🔧 Troubleshooting Commands:" -ForegroundColor Yellow
+Write-Host "🔧 Useful Commands:" -ForegroundColor Yellow
 Write-Host "   pm2 status                     # Check all PM2 processes"
-Write-Host "   pm2 describe posting-server    # Detailed info for posting-server"
+Write-Host "   pm2 describe posting-server    # Detailed server info"
 Write-Host "   pm2 logs posting-server        # View server logs"
-Write-Host "   pm2 restart posting-server     # Restart only posting-server"
-Write-Host "   pm2 delete posting-server      # Remove only posting-server"
-Write-Host "   node --version                 # Check Node.js version"
-Write-Host "   pm2 --version                  # Check PM2 version"
+Write-Host "   pm2 restart posting-server     # Restart server"
+Write-Host "   pm2 delete posting-server      # Remove server"
 Write-Host ""
 Write-Host "📊 Log files:" -ForegroundColor Cyan
 Write-Host "   - Auto-start: .\logs\autostart.log"
 Write-Host "   - Server: .\logs\posting-server.log"
 Write-Host ""
-Write-Host "🎉 Setup complete! Only posting-server will auto-start on boot." -ForegroundColor Green
-Write-Host "ℹ️ Other PM2 applications remain unaffected." -ForegroundColor Cyan
+Write-Host "🎉 Setup complete! Server will auto-start on boot." -ForegroundColor Green
