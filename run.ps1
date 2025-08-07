@@ -425,8 +425,9 @@ try {
 # Go back to parent directory
 Set-Location ..
 
-# Create startup script
+# Create a more robust startup script that works from any directory
 Write-Host "🔧 Setting up auto-start mechanism..."
+
 $currentDir = Get-Location
 $startupScript = Join-Path $currentDir "pm2-autostart.bat"
 $startupScriptContent = @"
@@ -434,60 +435,263 @@ $startupScriptContent = @"
 title PM2 AutoStart Service - Posting Server
 echo Starting PM2 Auto-Start Service for Posting Server...
 
+REM Set working directory to script location
 cd /d "$currentDir"
 
+REM Create logs directory if it doesn't exist
 if not exist "logs" mkdir "logs"
-echo %DATE% %TIME% - Auto-start service initiated >> "logs\autostart.log"
 
-timeout /t 15 /nobreak > nul
+REM Log startup attempt with unique identifier
+echo %DATE% %TIME% - [%RANDOM%] Auto-start service initiated >> "logs\autostart.log"
 
-set PATH=%PATH%;C:\Program Files\nodejs;%USERPROFILE%\AppData\Roaming\npm
+REM Wait for system to fully boot (only wait once per boot)
+timeout /t 15 /nobreak > nul 2>nul
 
-where pm2 >nul 2>&1
+REM Set comprehensive PATH for Node.js and npm
+set "NODE_PATH=C:\Program Files\nodejs"
+set "NPM_PATH=%USERPROFILE%\AppData\Roaming\npm"
+set "NPM_PATH_GLOBAL=%ALLUSERSPROFILE%\npm"
+set "PATH=%NODE_PATH%;%NPM_PATH%;%NPM_PATH_GLOBAL%;%PATH%"
+
+REM Also try common alternative paths
+if exist "C:\Program Files (x86)\nodejs" (
+    set "PATH=C:\Program Files (x86)\nodejs;%PATH%"
+)
+
+REM Log PATH for debugging
+echo %DATE% %TIME% - [%RANDOM%] PATH set to: %PATH% >> "logs\autostart.log"
+
+REM Check if Node.js is available
+where node >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo %DATE% %TIME% - PM2 not found in PATH >> "logs\autostart.log"
-    echo PM2 not found, please check installation
+    echo %DATE% %TIME% - [%RANDOM%] ERROR: Node.js not found in PATH >> "logs\autostart.log"
+    echo Node.js not found, please check installation
     timeout /t 10 /nobreak > nul
     goto :end
 )
 
-pm2 ping >nul 2>&1
-
-pm2 describe posting-server >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    echo %DATE% %TIME% - Posting server exists, restarting >> "logs\autostart.log"
-    pm2 restart posting-server >> "logs\autostart.log" 2>&1
-) else (
-    echo %DATE% %TIME% - Starting posting server >> "logs\autostart.log"
-    if exist "posting_server\server.js" (
-        pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> "logs\autostart.log" 2>&1
-    ) else (
-        echo %DATE% %TIME% - ERROR: posting_server\server.js not found >> "logs\autostart.log"
+REM Check if PM2 is available
+where pm2 >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo %DATE% %TIME% - [%RANDOM%] ERROR: PM2 not found in PATH >> "logs\autostart.log"
+    echo PM2 not found, installing globally...
+    npm install -g pm2@latest >> "logs\autostart.log" 2>&1
+    
+    REM Check again after installation
+    where pm2 >nul 2>&1
+    if %ERRORLEVEL% NEQ 0 (
+        echo %DATE% %TIME% - [%RANDOM%] ERROR: PM2 installation failed >> "logs\autostart.log"
         goto :end
     )
 )
 
-timeout /t 5 /nobreak > nul
-pm2 save >> "logs\autostart.log" 2>&1
+echo %DATE% %TIME% - [%RANDOM%] Node.js and PM2 found, proceeding... >> "logs\autostart.log"
+
+REM Initialize PM2 daemon (this is crucial)
+echo %DATE% %TIME% - [%RANDOM%] Initializing PM2 daemon... >> "logs\autostart.log"
+pm2 ping >> "logs\autostart.log" 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo %DATE% %TIME% - [%RANDOM%] PM2 daemon failed to start >> "logs\autostart.log"
+    goto :end
+)
+
+REM Use pm2 resurrect to restore all saved processes
+echo %DATE% %TIME% - [%RANDOM%] Attempting to resurrect saved PM2 processes... >> "logs\autostart.log"
+pm2 resurrect >> "logs\autostart.log" 2>&1
+
+REM Wait for processes to stabilize
+timeout /t 10 /nobreak > nul
+
+REM Check if posting-server is running
+pm2 describe posting-server >> "logs\autostart.log" 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo %DATE% %TIME% - [%RANDOM%] SUCCESS: Posting server is running >> "logs\autostart.log"
+    pm2 status >> "logs\autostart.log" 2>&1
+) else (
+    echo %DATE% %TIME% - [%RANDOM%] Posting server not found, attempting manual start... >> "logs\autostart.log"
+    
+    REM Navigate to posting_server directory and start manually
+    if exist "posting_server\server.js" (
+        echo %DATE% %TIME% - [%RANDOM%] Starting posting-server manually... >> "logs\autostart.log"
+        pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100 >> "logs\autostart.log" 2>&1
+        
+        REM Save the process list
+        pm2 save >> "logs\autostart.log" 2>&1
+        
+        REM Verify it started
+        pm2 describe posting-server >> "logs\autostart.log" 2>&1
+        if %ERRORLEVEL% EQU 0 (
+            echo %DATE% %TIME% - [%RANDOM%] SUCCESS: Posting server started manually >> "logs\autostart.log"
+        ) else (
+            echo %DATE% %TIME% - [%RANDOM%] ERROR: Failed to start posting server manually >> "logs\autostart.log"
+        )
+    ) else (
+        echo %DATE% %TIME% - [%RANDOM%] ERROR: posting_server\server.js not found >> "logs\autostart.log"
+    )
+)
 
 :end
-echo %DATE% %TIME% - Auto-start service completed >> "logs\autostart.log"
+echo %DATE% %TIME% - [%RANDOM%] Auto-start service completed >> "logs\autostart.log"
+
+REM Prevent multiple instances by creating a lock file temporarily
+echo lock > "%TEMP%\pm2_autostart_lock.tmp"
+timeout /t 30 /nobreak > nul
+if exist "%TEMP%\pm2_autostart_lock.tmp" del "%TEMP%\pm2_autostart_lock.tmp"
 "@
 
 Set-Content -Path $startupScript -Value $startupScriptContent -Encoding ASCII
 
-# Set up registry auto-start
+# Also create a PowerShell version for better reliability
+$powershellStartupScript = Join-Path $currentDir "pm2-autostart.ps1"
+$powershellStartupScriptContent = @"
+# PM2 Auto-start PowerShell Script
+`$ErrorActionPreference = "Continue"
+`$currentDir = "$currentDir"
+Set-Location `$currentDir
+
+# Create logs directory
+if (-not (Test-Path "logs")) { New-Item -ItemType Directory -Path "logs" -Force | Out-Null }
+
+# Log startup
+`$logEntry = "`$(Get-Date) - [PowerShell] Auto-start service initiated"
+Add-Content -Path "logs\autostart.log" -Value `$logEntry
+
+# Wait for system to boot
+Start-Sleep -Seconds 15
+
+# Set environment paths
+`$nodePaths = @(
+    "C:\Program Files\nodejs",
+    "C:\Program Files (x86)\nodejs",
+    "`$env:USERPROFILE\AppData\Roaming\npm",
+    "`$env:ALLUSERSPROFILE\npm"
+)
+
+foreach (`$path in `$nodePaths) {
+    if (Test-Path `$path) {
+        `$env:Path = "`$path;`$env:Path"
+    }
+}
+
+# Check Node.js
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] ERROR: Node.js not found"
+    exit 1
+}
+
+# Check/Install PM2
+if (-not (Get-Command pm2 -ErrorAction SilentlyContinue)) {
+    Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] Installing PM2..."
+    try {
+        npm install -g pm2@latest
+    } catch {
+        Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] ERROR: PM2 installation failed"
+        exit 1
+    }
+}
+
+Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] Initializing PM2 daemon..."
+
 try {
-    Write-Host "🔧 Setting up auto-start registry entry..."
-    $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    # Initialize PM2
+    pm2 ping | Out-Null
+    
+    # Resurrect saved processes
+    Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] Resurrecting PM2 processes..."
+    pm2 resurrect | Out-Null
+    
+    Start-Sleep -Seconds 10
+    
+    # Check if posting-server is running
+    `$processCheck = & pm2 describe posting-server 2>`$null
+    if (`$LASTEXITCODE -eq 0) {
+        Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] SUCCESS: Posting server is running"
+    } else {
+        Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] Starting posting-server manually..."
+        
+        if (Test-Path "posting_server\server.js") {
+            pm2 start posting_server\server.js --name "posting-server" --log logs\posting-server.log --exp-backoff-restart-delay=100
+            pm2 save
+            Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] Posting server started manually"
+        } else {
+            Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] ERROR: server.js not found"
+        }
+    }
+    
+} catch {
+    Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] ERROR: `$(`$_.Exception.Message)"
+}
+
+Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell] Auto-start service completed"
+"@
+
+Set-Content -Path $powershellStartupScript -Value $powershellStartupScriptContent -Encoding UTF8
+
+# Set up multiple auto-start methods for maximum reliability
+try {
+    Write-Host "🔧 Setting up multiple auto-start methods..."
+    
+    # Method 1: Registry Run key (User level)
+    $regPathUser = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     $regName = "PM2PostingServerAutoStart"
     
-    Remove-ItemProperty -Path $regPath -Name $regName -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $regPath -Name $regName -Value "`"$startupScript`""
+    Remove-ItemProperty -Path $regPathUser -Name $regName -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $regPathUser -Name $regName -Value "`"$startupScript`""
+    Write-Host "✅ User-level auto-start configured"
     
-    Write-Host "✅ Auto-start configured successfully!"
+    # Method 2: Try Machine-level registry (requires admin)
+    try {
+        $regPathMachine = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"
+        Remove-ItemProperty -Path $regPathMachine -Name $regName -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $regPathMachine -Name $regName -Value "`"$startupScript`""
+        Write-Host "✅ Machine-level auto-start configured"
+    } catch {
+        Write-Host "ℹ️ Machine-level auto-start not configured (requires admin)"
+    }
+    
+    # Method 3: Startup folder shortcut
+    try {
+        $startupFolder = [System.Environment]::GetFolderPath('Startup')
+        $shortcutPath = Join-Path $startupFolder "PM2PostingServerAutoStart.lnk"
+        
+        $WScriptShell = New-Object -ComObject WScript.Shell
+        $shortcut = $WScriptShell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $startupScript
+        $shortcut.WorkingDirectory = $currentDir
+        $shortcut.Description = "PM2 Posting Server Auto-Start"
+        $shortcut.Save()
+        
+        Write-Host "✅ Startup folder shortcut created"
+    } catch {
+        Write-Host "⚠️ Failed to create startup folder shortcut: $($_.Exception.Message)"
+    }
+    
+    # Method 4: Create a Windows service (if possible)
+    try {
+        $serviceName = "PM2PostingServer"
+        $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        
+        if ($existingService) {
+            Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            & sc.exe delete $serviceName | Out-Null
+        }
+        
+        # Use nssm if available, otherwise skip service creation
+        if (Get-Command nssm -ErrorAction SilentlyContinue) {
+            & nssm install $serviceName $startupScript
+            & nssm set $serviceName Start SERVICE_AUTO_START
+            & nssm set $serviceName Description "PM2 Posting Server Auto-Start Service"
+            Write-Host "✅ Windows service created with NSSM"
+        }
+        
+    } catch {
+        Write-Host "ℹ️ Windows service not configured (requires admin or NSSM)"
+    }
+    
+    Write-Host "✅ Auto-start configured with multiple methods!"
+    
 } catch {
-    Write-Host "⚠️ Failed to configure auto-start: $($_.Exception.Message)"
+    Write-Host "⚠️ Some auto-start methods failed: $($_.Exception.Message)"
 }
 
 # Final verification
