@@ -14,13 +14,32 @@ try {
 
 # Function to clean up on error
 function Cleanup {
-    if (Test-Path "posting_server") {
-        Write-Host "❌ An error occurred. Cleaning up..."
-        Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
+    Write-Host "🧹 Starting cleanup process..."
+    
+    try {
+        # Go back to parent directory if we're in posting_server
+        $currentPath = Get-Location
+        if ($currentPath.Path -like "*posting_server*") {
+            Write-Host "📂 Navigating back to parent directory..."
+            Set-Location ..
+        }
+        
+        if (Test-Path "posting_server") {
+            Write-Host "🗑️ Removing posting_server directory..."
+            Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
+        }
+        
+        if ($env:TEMP_DIR -and (Test-Path $env:TEMP_DIR)) {
+            Write-Host "🗑️ Removing temporary directory..."
+            Remove-Item -Recurse -Force $env:TEMP_DIR -ErrorAction SilentlyContinue
+        }
+        
+        Write-Host "✅ Cleanup completed"
+    } catch {
+        Write-Host "⚠️ Cleanup encountered errors: $($_.Exception.Message)"
     }
-    if ($env:TEMP_DIR -and (Test-Path $env:TEMP_DIR)) {
-        Remove-Item -Recurse -Force $env:TEMP_DIR -ErrorAction SilentlyContinue
-    }
+    
+    Write-Host "❌ Script execution failed. Check the error messages above for details."
     exit 1
 }
 
@@ -290,14 +309,74 @@ while (-not $cloneSuccess -and $attempt -le $maxAttempts) {
 }
 
 # Copy only the posting_server folder to our target location
-Copy-Item -Recurse "$env:TEMP_DIR\posting_server" -Destination "."
+Write-Host "📁 Copying posting_server folder..."
+try {
+    if (-not (Test-Path "$env:TEMP_DIR\posting_server")) {
+        Write-Host "❌ Error: posting_server folder not found in downloaded repository"
+        Write-Host "📋 Contents of temp directory:"
+        Get-ChildItem -Path $env:TEMP_DIR -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
+        throw "posting_server folder not found"
+    }
+    
+    Copy-Item -Recurse "$env:TEMP_DIR\posting_server" -Destination "." -Force
+    Write-Host "✅ posting_server folder copied successfully"
+    
+    # Verify the copy
+    if (-not (Test-Path "posting_server")) {
+        throw "Failed to copy posting_server folder to destination"
+    }
+    
+} catch {
+    Write-Host "❌ Failed to copy posting_server folder: $($_.Exception.Message)"
+    Write-Host "📋 Debugging information:"
+    Write-Host "  Temp directory: $env:TEMP_DIR"
+    Write-Host "  Current directory: $(Get-Location)"
+    
+    if (Test-Path $env:TEMP_DIR) {
+        Write-Host "  Temp directory contents:"
+        Get-ChildItem -Path $env:TEMP_DIR | ForEach-Object { Write-Host "    $($_.Name)" }
+    }
+    
+    throw "Copy operation failed"
+}
 
 # Clean up temporary directory
-Remove-Item -Recurse -Force $env:TEMP_DIR
-$env:TEMP_DIR = $null
+Write-Host "🧹 Cleaning up temporary files..."
+try {
+    Remove-Item -Recurse -Force $env:TEMP_DIR -ErrorAction SilentlyContinue
+    $env:TEMP_DIR = $null
+    Write-Host "✅ Temporary files cleaned up"
+} catch {
+    Write-Host "⚠️ Warning: Could not fully clean up temporary directory: $($_.Exception.Message)"
+}
 
 # Navigate to posting_server directory
-Set-Location posting_server
+Write-Host "📂 Navigating to posting_server directory..."
+try {
+    if (-not (Test-Path "posting_server")) {
+        throw "posting_server directory does not exist"
+    }
+    
+    Set-Location posting_server
+    Write-Host "✅ Successfully navigated to posting_server directory"
+    Write-Host "📋 Current location: $(Get-Location)"
+    
+    # Verify we have the required files
+    if (-not (Test-Path "server.js")) {
+        Write-Host "⚠️ Warning: server.js not found in posting_server directory"
+        Write-Host "📋 Contents of posting_server directory:"
+        Get-ChildItem | ForEach-Object { Write-Host "  $($_.Name)" }
+    } else {
+        Write-Host "✅ server.js found in posting_server directory"
+    }
+    
+} catch {
+    Write-Host "❌ Failed to navigate to posting_server directory: $($_.Exception.Message)"
+    Write-Host "📋 Current location: $(Get-Location)"
+    Write-Host "📋 Available directories:"
+    Get-ChildItem -Directory | ForEach-Object { Write-Host "  $($_.Name)" }
+    throw "Navigation failed"
+}
 
 # Install posting server dependencies with clean install
 Write-Host "📦 Installing posting server dependencies..."
