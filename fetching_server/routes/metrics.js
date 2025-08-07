@@ -206,7 +206,20 @@ router.get("/servers", authenticateToken, async (req, res) => {
       const deviceIds = req.query.deviceIds.split(",");
       conditions.deviceId = { $in: deviceIds };
     }
-    const servers = await Device.find(conditions);
+    if (req.query.search) {
+      conditions.$or = [
+        { deviceName: { $regex: req.query.search, $options: "i" } },
+        { ipV4: { $regex: req.query.search, $options: "i" } },
+      ];
+    }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+    const servers = await Device.find(conditions).skip(skip).limit(limit);
+    const totalDocs = await Device.countDocuments(conditions);
+    const hasNextPage = totalDocs > limit * page;
+    const hasPrevPage = page > 1;
+
     const serversWithMetrics = [];
     const thresholdTime = new Date(Date.now() - 1 * 120 * 1000);
 
@@ -243,7 +256,7 @@ router.get("/servers", authenticateToken, async (req, res) => {
         avgDiskUsage =
           diskMetrics.reduce((sum, disk) => sum + disk.usagePercentage, 0) /
           diskMetrics.length;
-          
+
         // Calculate overall disk usage for status determination
         for (const disk of diskMetrics) {
           if (
@@ -256,7 +269,7 @@ router.get("/servers", authenticateToken, async (req, res) => {
           }
         }
       }
-      
+
       let overallDiskUsage = 0;
       if (totalSize > 0) {
         overallDiskUsage = (totalUsed / totalSize) * 100;
@@ -273,7 +286,7 @@ router.get("/servers", authenticateToken, async (req, res) => {
           diskMetrics.length > 0 ? parseFloat(avgDiskUsage.toFixed(2)) : null,
         lastUpdated: latestCpuMetric ? latestCpuMetric.timestamp : null,
       };
-      
+
       // Determine server status
       const latestTimestamp =
         latestCpuMetric?.timestamp ||
@@ -307,7 +320,12 @@ router.get("/servers", authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      data: serversWithMetrics,
+      data: {
+        serversWithMetrics,
+        totalDocs,
+        hasNextPage,
+        hasPrevPage,
+      },
     });
   } catch (error) {
     console.error("Error fetching servers with metrics:", error);
@@ -545,7 +563,10 @@ router.get("/server-status", authenticateToken, async (req, res) => {
   try {
     const servers = await Device.find();
     const statusCategories = {
-      all: { count: servers.length, deviceIds: servers.map((server) => server.deviceId) },
+      all: {
+        count: servers.length,
+        deviceIds: servers.map((server) => server.deviceId),
+      },
       up: { count: 0, deviceIds: [] },
       trouble: { count: 0, deviceIds: [] },
       critical: { count: 0, deviceIds: [] },
@@ -648,10 +669,10 @@ router.get("/server-status", authenticateToken, async (req, res) => {
 router.delete("/servers/:deviceId", authenticateToken, async (req, res) => {
   try {
     const { deviceId } = req.params;
-    
+
     // Find the server first to check if it exists
     const server = await Device.findOne({ deviceId });
-    
+
     if (!server) {
       return res.status(404).json({
         success: false,
@@ -665,18 +686,18 @@ router.delete("/servers/:deviceId", authenticateToken, async (req, res) => {
       CPUMetrics.deleteMany({ deviceId }),
       MemoryMetrics.deleteMany({ deviceId }),
       DiskMetrics.deleteMany({ deviceId }),
-      NetworkMetrics.deleteMany({ deviceId })
+      NetworkMetrics.deleteMany({ deviceId }),
     ]);
 
     res.json({
       success: true,
-      message: `Server ${deviceId} and all related metrics have been deleted successfully`
+      message: `Server ${deviceId} and all related metrics have been deleted successfully`,
     });
   } catch (error) {
     console.error("Error deleting server and related metrics:", error);
     res.status(500).json({
       success: false,
-      error: "Failed to delete server and related metrics"
+      error: "Failed to delete server and related metrics",
     });
   }
 });
