@@ -1,6 +1,35 @@
 # Exit on error
 $ErrorActionPreference = "Stop"
 
+# Initial cleanup - kill any processes that might interfere
+Write-Host "🔍 Performing initial cleanup check..."
+if (Test-Path "posting_server") {
+    Write-Host "⚠️ Found existing posting_server directory. Performing aggressive cleanup..."
+    
+    # Kill all node processes first
+    Write-Host "🛑 Stopping all Node.js processes..."
+    Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    
+    # Stop PM2 posting-server if it exists
+    if (Get-Command pm2 -ErrorAction SilentlyContinue) {
+        Write-Host "🛑 Stopping PM2 posting-server process..."
+        pm2 delete posting-server 2>$null | Out-Null
+    }
+    
+    Start-Sleep -Seconds 3
+    
+    # Try to remove the directory
+    try {
+        Remove-Item -Recurse -Force "posting_server" -ErrorAction Stop
+        Write-Host "✅ Initial cleanup successful"
+    } catch {
+        Write-Host "❌ Could not remove existing posting_server directory"
+        Write-Host "🔧 Please manually delete the 'posting_server' folder and restart the script"
+        Write-Host "💡 Tip: Close any running Node.js applications and try again"
+        exit 1
+    }
+}
+
 # Configure TLS 1.2 for compatibility with all Windows versions
 Write-Host "🔒 Configuring TLS 1.2 for secure connections..."
 try {
@@ -208,36 +237,131 @@ if (Test-Path "posting_server") {
     try {
         # Stop only posting-server PM2 process if it exists
         if (Command-Exists pm2) {
+            Write-Host "🛑 Stopping posting-server PM2 process..."
             try {
                 pm2 delete posting-server 2>$null
+                Write-Host "✅ PM2 posting-server process stopped"
             } catch {
-                # Ignore errors if process doesn't exist
+                Write-Host "ℹ️ No PM2 posting-server process found"
             }
+            
+            # Wait a moment for PM2 to clean up
+            Start-Sleep -Seconds 2
         }
 
         # Kill any Node.js processes that might be using the directory
-        Get-Process | Where-Object { $_.Path -like "*\posting_server\*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-
-        # Take ownership of the directory and its contents
-        takeown /F "posting_server" /R /D Y
-        icacls "posting_server" /grant "$($env:USERNAME):F" /T
-
-        # Forcefully remove the directory, ignoring errors
-        Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
-
-        # Use cmd to attempt deletion if PowerShell fails
-        if (Test-Path "posting_server") {
-            cmd /c "rd /s /q posting_server"
+        Write-Host "🔍 Searching for Node.js processes using posting_server directory..."
+        $processes = Get-Process -Name "node" -ErrorAction SilentlyContinue | Where-Object { 
+            try {
+                $_.Path -and ($_.Path -like "*posting_server*" -or $_.WorkingSet -gt 0)
+            } catch {
+                $false
+            }
+        }
+        
+        if ($processes) {
+            Write-Host "🛑 Killing Node.js processes that might be using the directory..."
+            $processes | ForEach-Object {
+                try {
+                    Write-Host "  Killing process $($_.Id) - $($_.ProcessName)"
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                } catch {
+                    Write-Host "  ⚠️ Could not kill process $($_.Id)"
+                }
+            }
+            Start-Sleep -Seconds 3
         }
 
-        # Verify removal
-        if (-not (Test-Path "posting_server")) {
-            Write-Host "✅ Successfully removed posting_server directory."
+        # Kill any processes with handles to files in the directory
+        Write-Host "🔍 Killing processes with open handles to posting_server..."
+        try {
+            $handles = & handle.exe "posting_server" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                # Extract PIDs from handle output and kill them
+                $handles | ForEach-Object {
+                    if ($_ -match "pid:\s*(\d+)") {
+                        $handlePid = $matches[1]
+                        try {
+                            Stop-Process -Id $handlePid -Force -ErrorAction SilentlyContinue
+                            Write-Host "  Killed process $handlePid with handle to posting_server"
+                        } catch {
+                            # Ignore errors
+                        }
+                    }
+                }
+            }
+        } catch {
+            # Handle.exe might not be available, continue anyway
+        }
+
+        # Use PowerShell to unlock and delete
+        Write-Host "🔓 Taking ownership and setting permissions..."
+        takeown /F "posting_server" /R /D Y | Out-Null
+        icacls "posting_server" /grant "$($env:USERNAME):F" /T /Q | Out-Null
+
+        # Try multiple deletion methods
+        Write-Host "🗑️ Attempting to delete directory..."
+        
+        # Method 1: PowerShell Remove-Item with force
+        try {
+            Remove-Item -Recurse -Force "posting_server" -ErrorAction Stop
+            Write-Host "✅ Successfully removed using PowerShell"
+        } catch {
+            Write-Host "⚠️ PowerShell deletion failed: $($_.Exception.Message)"
+            
+            # Method 2: CMD rd command
+            try {
+                Write-Host "🔄 Trying CMD rd command..."
+                $result = cmd /c "rd /s /q posting_server 2>&1"
+                if (-not (Test-Path "posting_server")) {
+                    Write-Host "✅ Successfully removed using CMD"
+                } else {
+                    Write-Host "⚠️ CMD deletion partially failed"
+                }
+            } catch {
+                Write-Host "⚠️ CMD deletion failed: $($_.Exception.Message)"
+            }
+        }
+
+        # Method 3: Robocopy empty directory (nuclear option)
+        if (Test-Path "posting_server") {
+            Write-Host "🚀 Using robocopy nuclear option..."
+            try {
+                $emptyDir = Join-Path $env:TEMP "empty_$(Get-Random)"
+                New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+                
+                # Use robocopy to mirror empty directory (effectively deleting everything)
+                robocopy $emptyDir "posting_server" /MIR /R:0 /W:0 | Out-Null
+                
+                # Now try to delete the empty directory
+                Remove-Item -Recurse -Force "posting_server" -ErrorAction SilentlyContinue
+                Remove-Item -Recurse -Force $emptyDir -ErrorAction SilentlyContinue
+                
+                if (-not (Test-Path "posting_server")) {
+                    Write-Host "✅ Successfully removed using robocopy method"
+                }
+            } catch {
+                Write-Host "⚠️ Robocopy method failed: $($_.Exception.Message)"
+            }
+        }
+
+        # Final check and manual intervention message
+        if (Test-Path "posting_server") {
+            Write-Host "❌ All automated deletion methods failed" -ForegroundColor Red
+            Write-Host "🔧 Manual steps required:" -ForegroundColor Yellow
+            Write-Host "   1. Open Task Manager and kill any Node.js processes" -ForegroundColor Yellow
+            Write-Host "   2. Run 'pm2 kill' to stop all PM2 processes" -ForegroundColor Yellow
+            Write-Host "   3. Restart your computer if necessary" -ForegroundColor Yellow
+            Write-Host "   4. Manually delete the posting_server folder" -ForegroundColor Yellow
+            Write-Host "❌ Please resolve manually and re-run the script" -ForegroundColor Red
+            exit 1
         } else {
-            Write-Host "⚠️ Unable to remove posting_server directory. Manual intervention required." -ForegroundColor Yellow
+            Write-Host "✅ Successfully removed posting_server directory!"
         }
     } catch {
-        Write-Host "❌ Error during removal: $_" -ForegroundColor Red
+        Write-Host "❌ Error during removal: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "❌ Please manually delete the posting_server directory and re-run the script" -ForegroundColor Red
+        exit 1
     }
 }
 
