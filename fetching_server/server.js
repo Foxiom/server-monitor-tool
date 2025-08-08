@@ -49,7 +49,7 @@ app.use('/api', metricsRoutes);
 // Run once every 24 hours
 setInterval(deletePastMetrics, 24 * 60 * 60 * 1000);
 
-// Run every 1 minutes
+// Run every 1  minutes
 setInterval(updateServerStatus, 1 * 60 * 1000);
 setInterval(sendServerStatusEmail, 1 * 60 * 1000);
 
