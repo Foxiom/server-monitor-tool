@@ -157,11 +157,17 @@ router.post('/reset-password', async (req, res) => {
 router.post('/change-password', authenticateToken, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
-        const user = req.user;
 
+        const user = await User.findById(req.user._id);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
         const isValidPassword = await bcrypt.compare(currentPassword, user.password);
         if (!isValidPassword) {
-            return res.status(401).json({
+            return res.status(400).json({
                 success: false,
                 message: 'Current password is incorrect'
             });
@@ -169,6 +175,7 @@ router.post('/change-password', authenticateToken, async (req, res) => {
 
         const salt = await bcrypt.genSalt(10);
         user.password = await bcrypt.hash(newPassword, salt);
+        user.passwordChangedAt = new Date();
         await user.save();
 
         res.json({
@@ -180,6 +187,56 @@ router.post('/change-password', authenticateToken, async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error changing password'
+        });
+    }
+});
+
+router.post('/change-email', authenticateToken, async (req, res) => {
+    try {
+        const { email } = req.body;
+        const user = req.user;
+        if(!email){
+            return res.status(400).json({
+                success: false,
+                message: 'Email is required'
+            });
+        }
+
+        await User.findByIdAndUpdate(user._id, { email });
+
+        res.json({
+            success: true,
+            message: 'Email changed successfully'
+        });
+    } catch (error) {
+        console.error('Error changing email:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error changing email'
+        });
+    }
+});
+
+router.get('/get-profile', authenticateToken, async (req, res) => {
+    try {
+        const user =await User.findById(req.user._id).select('-password -passwordChangedAt');
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Profile fetched successfully',
+            data: user
+        });
+    } catch (error) {
+        console.error('Error fetching profile:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching profile'
         });
     }
 });
