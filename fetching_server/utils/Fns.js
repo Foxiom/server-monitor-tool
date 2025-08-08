@@ -19,7 +19,9 @@ const deletePastMetrics = async () => {
 
 const updateServerStatus = async () => {
   try {
-    const servers = await Device.find().select("deviceId");
+    const servers = await Device.find().select(
+      "deviceId status deviceName alertSent"
+    );
     const thresholdTime = new Date(Date.now() - 2 * 60 * 1000); // 2 minutes threshold
 
     // Batch operations for better performance
@@ -81,7 +83,7 @@ const updateServerStatus = async () => {
         if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
           return {
             deviceId,
-            alertSent: server.status !== "down" ? false : server.alertSent,
+            alertSent: server.status !== "down" ? false : true,
             status: "down",
             reason: "No recent metrics data",
           };
@@ -111,7 +113,9 @@ const updateServerStatus = async () => {
           deviceId,
           status,
           alertSent:
-            server.status === "down" && status == "up" ? false : server.alertSent,
+            server.status === "down" && status === "up"
+              ? false
+              : true,
           maxUsage: Math.round(maxUsage * 100) / 100, // Round to 2 decimal places
           cpuUsage: Math.round(cpuUsage * 100) / 100,
           memoryUsage: Math.round(memoryUsage * 100) / 100,
@@ -121,7 +125,7 @@ const updateServerStatus = async () => {
         console.error(`Error processing device ${deviceId}:`, error);
         return {
           deviceId,
-          alertSent: server.alertSent,
+          alertSent: true,
           status: "down",
           reason: "Error processing metrics",
         };
@@ -154,6 +158,7 @@ const updateServerStatus = async () => {
           alertSent,
           lastStatusUpdate: new Date(),
         };
+
 
         // Optionally store usage metrics in device document
         if (maxUsage !== undefined) {

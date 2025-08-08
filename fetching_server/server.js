@@ -50,7 +50,7 @@ app.use('/api', metricsRoutes);
 setInterval(deletePastMetrics, 24 * 60 * 60 * 1000);
 
 // Run every 1  minutes
-setInterval(updateServerStatus, 1 * 60 * 1000);
+setInterval(updateServerStatus, 1 * 80 * 1000);
 setInterval(sendServerStatusEmail, 1 * 60 * 1000);
 
 // Start the server
