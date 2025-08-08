@@ -118,6 +118,7 @@ const updateServerStatus = async () => {
         console.error(`Error processing device ${deviceId}:`, error);
         return {
           deviceId,
+          alertSent: false,
           status: "down",
           reason: "Error processing metrics",
         };
@@ -136,6 +137,7 @@ const updateServerStatus = async () => {
         const {
           deviceId,
           status,
+          alertSent,
           maxUsage,
           cpuUsage,
           memoryUsage,
@@ -146,7 +148,7 @@ const updateServerStatus = async () => {
         // Prepare update operation
         const updateData = {
           status,
-          alertSent: status === "up" ? true : false,
+          alertSent,
           lastStatusUpdate: new Date(),
         };
 
