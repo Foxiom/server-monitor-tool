@@ -271,7 +271,7 @@ const sendServerStatusEmail = async () => {
       await sendEmail(emailOptions);
       await Device.updateMany(
         { deviceId: { $in: upDevices.map((device) => device.deviceId) } },
-        { alertSent: true }
+        { alertSent: false }
       );
     }
     if (downDevices.length > 0) {
