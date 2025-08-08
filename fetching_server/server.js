@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const connectToMongoDB = require('./config/db');
@@ -5,6 +6,7 @@ const authRoutes = require('./routes/auth');
 const metricsRoutes = require('./routes/metrics');
 const User = require('./models/User');
 const bcrypt = require('bcryptjs');
+const { deletePastMetrics, updateServerStatus, sendServerStatusEmail } = require('./utils/Fns');
 const app = express();
 const port = 3001; // Different port from data-posting-server to avoid conflicts
 
@@ -42,21 +44,14 @@ async function initializeDefaultAdmin() {
 app.use('/api/auth', authRoutes);
 app.use('/api', metricsRoutes);
 
-const deletePastMetrics = async () => {
-    try {
-        const threeMonthsAgo = new Date(Date.now() - 3 * 30 * 24 * 60 * 60 * 1000);
-        await CPUMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
-        await MemoryMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
-        await DiskMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
-        await NetworkMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
-        console.log('Past metrics deleted successfully');
-    } catch (error) {
-        console.error('Error deleting past metrics:', error);
-    }
-};
+
 
 // Run once every 24 hours
 setInterval(deletePastMetrics, 24 * 60 * 60 * 1000);
+
+// Run every 2 minutes
+setInterval(updateServerStatus, 2 * 60 * 1000);
+setInterval(sendServerStatusEmail, 2 * 60 * 1000);
 
 // Start the server
 app.listen(port, async () => {

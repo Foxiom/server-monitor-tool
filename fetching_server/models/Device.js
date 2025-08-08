@@ -18,6 +18,21 @@ const deviceSchema = new mongoose.Schema({
     timestamp: {
         type: Date,
         default: Date.now
+    },
+    status: {
+        type: String,
+        enum: ['up', 'down', "critical", "trouble"],
+        default: 'up'
+    },
+    alertSent: {
+        type: Boolean,
+        default: false
+    },
+    metrics: {
+        cpu: Number,
+        memory: Number,
+        disk: Number,
+        lastUpdated: Date
     }
 });
 

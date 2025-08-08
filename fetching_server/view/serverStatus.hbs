@@ -1,0 +1,35 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Server Status Update</title>
+    <style>
+      body { font-family: Arial, sans-serif; line-height: 1.5; background: #f9f9f9; color: #333; padding: 20px; }
+      .container { background: #fff; border-radius: 8px; padding: 20px; max-width: 600px; margin: auto; border: 1px solid #ddd; }
+      .status-up { color: green; font-weight: bold; }
+      .status-down { color: red; font-weight: bold; }
+      ul { padding-left: 20px; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <p>Hello,</p>
+      <p>The following server status has been updated:</p>
+
+      {{#if isUp}}
+        <p>Status: <span class="status-up">UP</span></p>
+      {{else}}
+        <p>Status: <span class="status-down">DOWN</span></p>
+      {{/if}}
+
+      <p><strong>Servers affected:</strong></p>
+      <ul>
+        {{#each servers}}
+          <li>{{this}}</li>
+        {{/each}}
+      </ul>
+
+      <p>Please take appropriate action if required.<br/>Thank you.</p>
+    </div>
+  </body>
+</html>

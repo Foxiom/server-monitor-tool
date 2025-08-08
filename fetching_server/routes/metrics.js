@@ -206,6 +206,11 @@ router.get("/servers", authenticateToken, async (req, res) => {
       const deviceIds = req.query.deviceIds.split(",");
       conditions.deviceId = { $in: deviceIds };
     }
+
+    if(req.query.status){
+      conditions.status = req.query.status;
+    }
+
     if (req.query.search) {
       conditions.$or = [
         { deviceName: { $regex: req.query.search, $options: "i" } },
@@ -220,108 +225,10 @@ router.get("/servers", authenticateToken, async (req, res) => {
     const hasNextPage = totalDocs > limit * page;
     const hasPrevPage = page > 1;
 
-    const serversWithMetrics = [];
-    const thresholdTime = new Date(Date.now() - 1 * 120 * 1000);
-
-    for (const server of servers) {
-      const deviceId = server.deviceId;
-      const serverData = server.toObject();
-
-      const latestCpuMetric = await CPUMetrics.findOne({ deviceId })
-        .sort({ timestamp: -1 })
-        .limit(1);
-
-      const latestMemoryMetric = await MemoryMetrics.findOne({ deviceId })
-        .sort({ timestamp: -1 })
-        .limit(1);
-
-      const diskMetrics = await DiskMetrics.aggregate([
-        { $match: { deviceId } },
-        { $sort: { timestamp: -1 } },
-        {
-          $group: {
-            _id: "$filesystem",
-            latestMetric: { $first: "$$ROOT" },
-          },
-        },
-        { $replaceRoot: { newRoot: "$latestMetric" } },
-      ]);
-
-      // Calculate overall disk usage percentage
-      let avgDiskUsage = 0;
-      let totalUsed = 0;
-      let totalSize = 0;
-      if (diskMetrics.length > 0) {
-        // Calculate average disk usage percentage for backward compatibility
-        avgDiskUsage =
-          diskMetrics.reduce((sum, disk) => sum + disk.usagePercentage, 0) /
-          diskMetrics.length;
-
-        // Calculate overall disk usage for status determination
-        for (const disk of diskMetrics) {
-          if (
-            typeof disk.used === "number" &&
-            typeof disk.size === "number" &&
-            disk.size > 0
-          ) {
-            totalUsed += disk.used;
-            totalSize += disk.size;
-          }
-        }
-      }
-
-      let overallDiskUsage = 0;
-      if (totalSize > 0) {
-        overallDiskUsage = (totalUsed / totalSize) * 100;
-      }
-
-      serverData.metrics = {
-        cpu: latestCpuMetric
-          ? parseFloat(latestCpuMetric.usagePercentage)
-          : null,
-        memory: latestMemoryMetric
-          ? parseFloat(latestMemoryMetric.usagePercentage)
-          : null,
-        disk:
-          diskMetrics.length > 0 ? parseFloat(avgDiskUsage.toFixed(2)) : null,
-        lastUpdated: latestCpuMetric ? latestCpuMetric.timestamp : null,
-      };
-
-      // Determine server status
-      const latestTimestamp =
-        latestCpuMetric?.timestamp ||
-        latestMemoryMetric?.timestamp ||
-        (diskMetrics.length > 0 ? diskMetrics[0].timestamp : null);
-
-      if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
-        serverData.status = "down";
-      } else {
-        const cpuUsage = latestCpuMetric
-          ? parseFloat(latestCpuMetric.usagePercentage)
-          : 0;
-        const memoryUsage = latestMemoryMetric
-          ? parseFloat(latestMemoryMetric.usagePercentage)
-          : 0;
-
-        // Use the maximum usage value to determine status
-        const maxUsage = Math.max(cpuUsage, memoryUsage, overallDiskUsage);
-
-        if (maxUsage >= 90) {
-          serverData.status = "critical";
-        } else if (maxUsage >= 80) {
-          serverData.status = "trouble";
-        } else {
-          serverData.status = "up";
-        }
-      }
-
-      serversWithMetrics.push(serverData);
-    }
-
     res.json({
       success: true,
       data: {
-        serversWithMetrics,
+        servers,
         totalDocs,
         hasNextPage,
         hasPrevPage,
@@ -561,100 +468,145 @@ router.get("/disk-metrics/:deviceId", authenticateToken, async (req, res) => {
 // Fetch server status counts
 router.get("/server-status", authenticateToken, async (req, res) => {
   try {
-    const servers = await Device.find();
-    const statusCategories = {
-      all: {
-        count: servers.length,
-        deviceIds: servers.map((server) => server.deviceId),
-      },
-      up: { count: 0, deviceIds: [] },
-      trouble: { count: 0, deviceIds: [] },
-      critical: { count: 0, deviceIds: [] },
-      down: { count: 0, deviceIds: [] },
-    };
+    // const servers = await Device.find();
+    // const statusCategories = {
+    //   all: {
+    //     count: servers.length,
+    //     deviceIds: servers.map((server) => server.deviceId),
+    //   },
+    //   up: { count: 0, deviceIds: [] },
+    //   trouble: { count: 0, deviceIds: [] },
+    //   critical: { count: 0, deviceIds: [] },
+    //   down: { count: 0, deviceIds: [] },
+    // };
 
-    const thresholdTime = new Date(Date.now() - 1 * 120 * 1000);
+    // const thresholdTime = new Date(Date.now() - 1 * 120 * 1000);
 
-    for (const server of servers) {
-      const deviceId = server.deviceId;
+    // for (const server of servers) {
+    //   const deviceId = server.deviceId;
 
-      const latestCpuMetric = await CPUMetrics.findOne({ deviceId })
-        .sort({ timestamp: -1 })
-        .limit(1);
+    //   const latestCpuMetric = await CPUMetrics.findOne({ deviceId })
+    //     .sort({ timestamp: -1 })
+    //     .limit(1);
 
-      const latestMemoryMetric = await MemoryMetrics.findOne({ deviceId })
-        .sort({ timestamp: -1 })
-        .limit(1);
+    //   const latestMemoryMetric = await MemoryMetrics.findOne({ deviceId })
+    //     .sort({ timestamp: -1 })
+    //     .limit(1);
 
-      // Fetch all latest disk metrics for this device
-      const diskMetrics = await DiskMetrics.aggregate([
-        { $match: { deviceId } },
-        { $sort: { timestamp: -1 } },
-        {
-          $group: {
-            _id: "$filesystem",
-            latestMetric: { $first: "$$ROOT" },
+    //   // Fetch all latest disk metrics for this device
+    //   const diskMetrics = await DiskMetrics.aggregate([
+    //     { $match: { deviceId } },
+    //     { $sort: { timestamp: -1 } },
+    //     {
+    //       $group: {
+    //         _id: "$filesystem",
+    //         latestMetric: { $first: "$$ROOT" },
+    //       },
+    //     },
+    //     { $replaceRoot: { newRoot: "$latestMetric" } },
+    //   ]);
+
+    //   // Calculate overall disk usage percentage
+    //   let overallDiskUsage = 0;
+    //   let totalUsed = 0;
+    //   let totalSize = 0;
+    //   if (diskMetrics.length > 0) {
+    //     for (const disk of diskMetrics) {
+    //       if (
+    //         typeof disk.used === "number" &&
+    //         typeof disk.size === "number" &&
+    //         disk.size > 0
+    //       ) {
+    //         totalUsed += disk.used;
+    //         totalSize += disk.size;
+    //       }
+    //     }
+    //     if (totalSize > 0) {
+    //       overallDiskUsage = (totalUsed / totalSize) * 100;
+    //     }
+    //   }
+
+    //   const latestTimestamp =
+    //     latestCpuMetric?.timestamp ||
+    //     latestMemoryMetric?.timestamp ||
+    //     (diskMetrics.length > 0 ? diskMetrics[0].timestamp : null);
+
+    //   if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
+    //     statusCategories.down.count++;
+    //     statusCategories.down.deviceIds.push(deviceId);
+    //     continue;
+    //   }
+
+    //   const cpuUsage = latestCpuMetric
+    //     ? parseFloat(latestCpuMetric.usagePercentage)
+    //     : 0;
+    //   const memoryUsage = latestMemoryMetric
+    //     ? parseFloat(latestMemoryMetric.usagePercentage)
+    //     : 0;
+
+    //   // Use overallDiskUsage instead of maxDiskUsage
+    //   const maxUsage = Math.max(cpuUsage, memoryUsage, overallDiskUsage);
+
+    //   if (maxUsage >= 90) {
+    //     statusCategories.critical.count++;
+    //     statusCategories.critical.deviceIds.push(deviceId);
+    //   } else if (maxUsage >= 80) {
+    //     statusCategories.trouble.count++;
+    //     statusCategories.trouble.deviceIds.push(deviceId);
+    //   } else {
+    //     statusCategories.up.count++;
+    //     statusCategories.up.deviceIds.push(deviceId);
+    //   }
+    // }
+
+    const result = await Device.aggregate([
+      {
+        $group: {
+          _id: null,
+          all: { $sum: 1 },
+          up: {
+            $sum: { $cond: [{ $eq: ["$status", "up"] }, 1, 0] }
           },
-        },
-        { $replaceRoot: { newRoot: "$latestMetric" } },
-      ]);
-
-      // Calculate overall disk usage percentage
-      let overallDiskUsage = 0;
-      let totalUsed = 0;
-      let totalSize = 0;
-      if (diskMetrics.length > 0) {
-        for (const disk of diskMetrics) {
-          if (
-            typeof disk.used === "number" &&
-            typeof disk.size === "number" &&
-            disk.size > 0
-          ) {
-            totalUsed += disk.used;
-            totalSize += disk.size;
+          down: {
+            $sum: { $cond: [{ $eq: ["$status", "down"] }, 1, 0] }
+          },
+          critical: {
+            $sum: { $cond: [{ $eq: ["$status", "critical"] }, 1, 0] }
+          },
+          trouble: {
+            $sum: { $cond: [{ $eq: ["$status", "trouble"] }, 1, 0] }
           }
         }
-        if (totalSize > 0) {
-          overallDiskUsage = (totalUsed / totalSize) * 100;
+      },
+      {
+        $project: {
+          _id: 0,
+          all: 1,
+          up: 1,
+          down: 1,
+          critical: 1,
+          trouble: 1
         }
       }
+    ]);
 
-      const latestTimestamp =
-        latestCpuMetric?.timestamp ||
-        latestMemoryMetric?.timestamp ||
-        (diskMetrics.length > 0 ? diskMetrics[0].timestamp : null);
-
-      if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
-        statusCategories.down.count++;
-        statusCategories.down.deviceIds.push(deviceId);
-        continue;
-      }
-
-      const cpuUsage = latestCpuMetric
-        ? parseFloat(latestCpuMetric.usagePercentage)
-        : 0;
-      const memoryUsage = latestMemoryMetric
-        ? parseFloat(latestMemoryMetric.usagePercentage)
-        : 0;
-
-      // Use overallDiskUsage instead of maxDiskUsage
-      const maxUsage = Math.max(cpuUsage, memoryUsage, overallDiskUsage);
-
-      if (maxUsage >= 90) {
-        statusCategories.critical.count++;
-        statusCategories.critical.deviceIds.push(deviceId);
-      } else if (maxUsage >= 80) {
-        statusCategories.trouble.count++;
-        statusCategories.trouble.deviceIds.push(deviceId);
-      } else {
-        statusCategories.up.count++;
-        statusCategories.up.deviceIds.push(deviceId);
-      }
+    if (!result.length || Object.keys(result[0]).length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          all: 0,
+          up: 0,
+          down: 0,
+          critical: 0,
+          trouble: 0
+        }
+      });
     }
-
-    res.json({
+    
+    
+    res.status(200).json({
       success: true,
-      data: statusCategories,
+      data: result[0],
     });
   } catch (error) {
     console.error("Error fetching server status counts:", error);
