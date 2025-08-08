@@ -81,6 +81,7 @@ const updateServerStatus = async () => {
         if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
           return {
             deviceId,
+            alertSent: false,
             status: "down",
             reason: "No recent metrics data",
           };
@@ -258,10 +259,10 @@ const getServerStatusSummary = async () => {
 //send server status to email
 const sendServerStatusEmail = async () => {
   try {
-    const downDevices = await Device.find({ status: "down" , alertSent: false})
+    const downDevices = await Device.find({ status: "down", alertSent: false })
       .select("deviceId deviceName")
       .lean();
-    const upDevices = await Device.find({ status: "up" , alertSent: true})
+    const upDevices = await Device.find({ status: "up", alertSent: true })
       .select("deviceId deviceName")
       .lean();
 
