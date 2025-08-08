@@ -81,7 +81,7 @@ const updateServerStatus = async () => {
         if (!latestTimestamp || new Date(latestTimestamp) < thresholdTime) {
           return {
             deviceId,
-            alertSent: false,
+            alertSent: server.status !== "down" ? false : server.alertSent,
             status: "down",
             reason: "No recent metrics data",
           };
@@ -110,6 +110,8 @@ const updateServerStatus = async () => {
         return {
           deviceId,
           status,
+          alertSent:
+            server.status === "down" && status == "up" ? false : server.alertSent,
           maxUsage: Math.round(maxUsage * 100) / 100, // Round to 2 decimal places
           cpuUsage: Math.round(cpuUsage * 100) / 100,
           memoryUsage: Math.round(memoryUsage * 100) / 100,
@@ -119,7 +121,7 @@ const updateServerStatus = async () => {
         console.error(`Error processing device ${deviceId}:`, error);
         return {
           deviceId,
-          alertSent: false,
+          alertSent: server.alertSent,
           status: "down",
           reason: "Error processing metrics",
         };
@@ -262,7 +264,7 @@ const sendServerStatusEmail = async () => {
     const downDevices = await Device.find({ status: "down", alertSent: false })
       .select("deviceId deviceName")
       .lean();
-    const upDevices = await Device.find({ status: "up", alertSent: true })
+    const upDevices = await Device.find({ status: "up", alertSent: false })
       .select("deviceId deviceName")
       .lean();
 
@@ -274,7 +276,7 @@ const sendServerStatusEmail = async () => {
       await sendEmail(emailOptions);
       await Device.updateMany(
         { deviceId: { $in: upDevices.map((device) => device.deviceId) } },
-        { alertSent: false }
+        { alertSent: true }
       );
     }
     if (downDevices.length > 0) {
