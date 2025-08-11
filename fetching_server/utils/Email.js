@@ -25,7 +25,7 @@ const sendEmail = async (options) => {
     // 2) Define the email options
     const mailOptions = {
       from: process.env.EMAIL_USERNAME,
-      to: process.env.EMAIL_USERNAME,
+      to: process.env.EMAIL_TO,
       subject: "Server Status",
       html: emailTemplate({
         servers: options.servers,
