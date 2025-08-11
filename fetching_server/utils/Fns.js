@@ -3,6 +3,7 @@ const Device = require("../models/Device");
 const DiskMetrics = require("../models/DiskMetrics");
 const MemoryMetrics = require("../models/MemoryMetrics");
 const sendEmail = require("./Email");
+const { broadcast } = require("./PushSender");
 
 const deletePastMetrics = async () => {
   try {
@@ -22,7 +23,7 @@ const updateServerStatus = async () => {
     const servers = await Device.find().select(
       "deviceId status deviceName alertSent"
     );
-    const thresholdTime = new Date(Date.now() - 2 * 60 * 1000); // 2 minutes threshold
+    const thresholdTime = new Date(Date.now() - (2 * 60 + 10) * 1000); // 2 min 10 sec
 
     // Batch operations for better performance
     const bulkOperations = [];
@@ -112,10 +113,7 @@ const updateServerStatus = async () => {
         return {
           deviceId,
           status,
-          alertSent:
-            server.status === "down" && status === "up"
-              ? false
-              : true,
+          alertSent: server.status === "down" && status === "up" ? false : true,
           maxUsage: Math.round(maxUsage * 100) / 100, // Round to 2 decimal places
           cpuUsage: Math.round(cpuUsage * 100) / 100,
           memoryUsage: Math.round(memoryUsage * 100) / 100,
@@ -158,7 +156,6 @@ const updateServerStatus = async () => {
           alertSent,
           lastStatusUpdate: new Date(),
         };
-
 
         // Optionally store usage metrics in device document
         if (maxUsage !== undefined) {
@@ -263,6 +260,17 @@ const getServerStatusSummary = async () => {
   }
 };
 
+const sendServerStatusPush = async (devices, status) => {
+  if (!devices.length) return;
+  const payload = {
+    title: `Servers ${status}`,
+    body: devices.map((d) => d.deviceName).join(", "),
+    tag: `servers-${status}`,
+    url: "/app/servers", // open path on click
+  };
+  await broadcast(payload);
+};
+
 //send server status to email
 const sendServerStatusEmail = async () => {
   try {
@@ -272,6 +280,10 @@ const sendServerStatusEmail = async () => {
     const upDevices = await Device.find({ status: "up", alertSent: false })
       .select("deviceId deviceName")
       .lean();
+
+    // after sending email:
+    if (upDevices.length) await sendServerStatusPush(upDevices, "up");
+    if (downDevices.length) await sendServerStatusPush(downDevices, "down");
 
     if (upDevices.length > 0) {
       const emailOptions = {
