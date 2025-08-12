@@ -13,8 +13,8 @@
   </head>
   <body>
     <div class="container">
-      <p>Hello,</p>
-      <p>The following server status has been updated:</p>
+      <p>Dear Team,</p>
+      <p>Please be informed that the following server status has been updated:</p>
 
       {{#if isUp}}
         <p>Status: <span class="status-up">UP</span></p>
@@ -22,14 +22,14 @@
         <p>Status: <span class="status-down">DOWN</span></p>
       {{/if}}
 
-      <p><strong>Servers affected:</strong></p>
+      <p><strong>Affected Servers:</strong></p>
       <ul>
         {{#each servers}}
           <li>{{this}}</li>
         {{/each}}
       </ul>
 
-      <p>Please take appropriate action if required.<br/>Thank you.</p>
+      <p>Kindly take appropriate action as necessary.<br/>Thank you for your attention.</p>
     </div>
   </body>
 </html>
