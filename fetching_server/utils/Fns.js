@@ -266,7 +266,7 @@ const sendServerStatusPush = async (devices, status) => {
     title: `Servers ${status}`,
     body: devices.map((d) => d.deviceName).join(", "),
     tag: `servers-${status}`,
-    url: "/app/servers", // open path on click
+    url: "/dashboard/servers", // open path on click
   };
   await broadcast(payload);
 };
