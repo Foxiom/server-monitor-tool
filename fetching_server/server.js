@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const connectToMongoDB = require('./config/db');
+const webpush = require('./config/webpush');
 const authRoutes = require('./routes/auth');
 const metricsRoutes = require('./routes/metrics');
 const User = require('./models/User');
