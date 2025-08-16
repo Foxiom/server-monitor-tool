@@ -8,10 +8,11 @@ const { broadcast } = require("./PushSender");
 const deletePastMetrics = async () => {
   try {
     const threeMonthsAgo = new Date(Date.now() - 3 * 30 * 24 * 60 * 60 * 1000);
+    const oneMonthAgo = new Date(Date.now() - 1 * 30 * 24 * 60 * 60 * 1000);
     await CPUMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
     await MemoryMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
     await DiskMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
-    await NetworkMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
+    await NetworkMetrics.deleteMany({ timestamp: { $lt: oneMonthAgo } });
     console.log("Past metrics deleted successfully");
   } catch (error) {
     console.error("Error deleting past metrics:", error);

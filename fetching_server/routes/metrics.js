@@ -691,4 +691,199 @@ router.delete("/servers/:deviceId", authenticateToken, async (req, res) => {
   }
 });
 
+router.get("/reports", authenticateToken, async (req, res) => {
+  try {
+    // Define time ranges
+    const now = new Date();
+    const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const lastMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // Get all active devices
+    const devices = await Device.find({}, 'deviceId deviceName ipV4 status').lean();
+    
+    if (!devices || devices.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        message: "No devices found"
+      });
+    }
+
+    const deviceIds = devices.map(device => device.deviceId);
+
+    // Parallel aggregation for all metrics and time periods
+    const [
+      cpu24h, cpuWeek, cpuMonth,
+      memory24h, memoryWeek, memoryMonth,
+      disk24h, diskWeek, diskMonth,
+      network24h, networkWeek, networkMonth
+    ] = await Promise.all([
+      // CPU Metrics
+      aggregateMetrics(CPUMetrics, deviceIds, last24Hours, 'cpu'),
+      aggregateMetrics(CPUMetrics, deviceIds, lastWeek, 'cpu'),
+      aggregateMetrics(CPUMetrics, deviceIds, lastMonth, 'cpu'),
+      
+      // Memory Metrics
+      aggregateMetrics(MemoryMetrics, deviceIds, last24Hours, 'memory'),
+      aggregateMetrics(MemoryMetrics, deviceIds, lastWeek, 'memory'),
+      aggregateMetrics(MemoryMetrics, deviceIds, lastMonth, 'memory'),
+      
+      // Disk Metrics
+      aggregateMetrics(DiskMetrics, deviceIds, last24Hours, 'disk'),
+      aggregateMetrics(DiskMetrics, deviceIds, lastWeek, 'disk'),
+      aggregateMetrics(DiskMetrics, deviceIds, lastMonth, 'disk'),
+      
+      // Network Metrics
+      aggregateMetrics(NetworkMetrics, deviceIds, last24Hours, 'network'),
+      aggregateMetrics(NetworkMetrics, deviceIds, lastWeek, 'network'),
+      aggregateMetrics(NetworkMetrics, deviceIds, lastMonth, 'network')
+    ]);
+
+    // Organize data by device
+    const reports = devices.map(device => {
+      const deviceId = device.deviceId;
+      
+      return {
+        deviceId: device.deviceId,
+        deviceName: device.deviceName,
+        ipV4: device.ipV4,
+        status: device.status,
+        reports: {
+          last24Hours: {
+            cpu: findMetricByDeviceId(cpu24h, deviceId),
+            memory: findMetricByDeviceId(memory24h, deviceId),
+            disk: findMetricByDeviceId(disk24h, deviceId),
+            network: findMetricByDeviceId(network24h, deviceId)
+          },
+          lastWeek: {
+            cpu: findMetricByDeviceId(cpuWeek, deviceId),
+            memory: findMetricByDeviceId(memoryWeek, deviceId),
+            disk: findMetricByDeviceId(diskWeek, deviceId),
+            network: findMetricByDeviceId(networkWeek, deviceId)
+          },
+          lastMonth: {
+            cpu: findMetricByDeviceId(cpuMonth, deviceId),
+            memory: findMetricByDeviceId(memoryMonth, deviceId),
+            disk: findMetricByDeviceId(diskMonth, deviceId),
+            network: findMetricByDeviceId(networkMonth, deviceId)
+          }
+        }
+      };
+    });
+
+    res.json({
+      success: true,
+      data: reports,
+      totalDevices: devices.length,
+      generatedAt: now
+    });
+
+  } catch (error) {
+    console.error("Error generating reports:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to generate reports",
+      details: error.message
+    });
+  }
+});
+
+// Helper function to aggregate metrics efficiently
+async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
+  const pipeline = [
+    {
+      $match: {
+        deviceId: { $in: deviceIds },
+        timestamp: { $gte: startTime }
+      }
+    },
+    {
+      $group: {
+        _id: "$deviceId",
+        ...getAggregationFields(metricType),
+        dataPoints: { $sum: 1 },
+        firstRecorded: { $min: "$timestamp" },
+        lastRecorded: { $max: "$timestamp" }
+      }
+    }
+  ];
+
+  return await Model.aggregate(pipeline).exec();
+}
+
+// Helper function to get aggregation fields based on metric type
+function getAggregationFields(metricType) {
+  switch (metricType) {
+    case 'cpu':
+      return {
+        avgUsagePercentage: { $avg: "$usagePercentage" },
+        maxUsagePercentage: { $max: "$usagePercentage" },
+        minUsagePercentage: { $min: "$usagePercentage" },
+        avgUserPercentage: { $avg: "$userPercentage" },
+        avgSysPercentage: { $avg: "$sysPercentage" }
+      };
+    
+    case 'memory':
+      return {
+        avgUsagePercentage: { $avg: "$usagePercentage" },
+        maxUsagePercentage: { $max: "$usagePercentage" },
+        minUsagePercentage: { $min: "$usagePercentage" },
+        avgTotalMemory: { $avg: "$totalMemory" },
+        avgUsedMemory: { $avg: "$usedMemory" },
+        avgFreeMemory: { $avg: "$freeMemory" }
+      };
+    
+    case 'disk':
+      return {
+        avgUsagePercentage: { $avg: "$usagePercentage" },
+        maxUsagePercentage: { $max: "$usagePercentage" },
+        minUsagePercentage: { $min: "$usagePercentage" },
+        avgSize: { $avg: "$size" },
+        avgUsed: { $avg: "$used" },
+        avgAvailable: { $avg: "$available" }
+      };
+    
+    case 'network':
+      return {
+        totalBytesReceived: { $sum: "$bytesReceived" },
+        totalBytesSent: { $sum: "$bytesSent" },
+        avgBytesReceived: { $avg: "$bytesReceived" },
+        avgBytesSent: { $avg: "$bytesSent" },
+        totalPacketsReceived: { $sum: "$packetsReceived" },
+        totalPacketsSent: { $sum: "$packetsSent" },
+        totalErrorsReceived: { $sum: "$errorsReceived" },
+        totalErrorsSent: { $sum: "$errorsSent" }
+      };
+    
+    default:
+      return {};
+  }
+}
+
+// Helper function to find metric data for a specific device
+function findMetricByDeviceId(metricsArray, deviceId) {
+  const metric = metricsArray.find(m => m._id === deviceId);
+  if (!metric) {
+    return {
+      available: false,
+      message: "No data available for this period"
+    };
+  }
+
+  // Remove the _id field and add availability flag
+  const { _id, ...data } = metric;
+  return {
+    available: true,
+    ...data,
+    // Round percentage values to 2 decimal places
+    ...Object.keys(data).reduce((acc, key) => {
+      if (key.includes('Percentage') && typeof data[key] === 'number') {
+        acc[key] = Math.round(data[key] * 100) / 100;
+      }
+      return acc;
+    }, {})
+  };
+}
+
 module.exports = router;
