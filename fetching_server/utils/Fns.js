@@ -2,17 +2,17 @@ const CPUMetrics = require("../models/CPUMetrics");
 const Device = require("../models/Device");
 const DiskMetrics = require("../models/DiskMetrics");
 const MemoryMetrics = require("../models/MemoryMetrics");
+const NetworkMetrics = require("../models/NetworkMetrics");
 const sendEmail = require("./Email");
 const { broadcast } = require("./PushSender");
 
 const deletePastMetrics = async () => {
   try {
     const threeMonthsAgo = new Date(Date.now() - 3 * 30 * 24 * 60 * 60 * 1000);
-    const oneMonthAgo = new Date(Date.now() - 1 * 30 * 24 * 60 * 60 * 1000);
     await CPUMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
     await MemoryMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
     await DiskMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
-    await NetworkMetrics.deleteMany({ timestamp: { $lt: oneMonthAgo } });
+    await NetworkMetrics.deleteMany({ timestamp: { $lt: threeMonthsAgo } });
     console.log("Past metrics deleted successfully");
   } catch (error) {
     console.error("Error deleting past metrics:", error);
@@ -314,9 +314,152 @@ const sendServerStatusEmail = async () => {
   }
 };
 
+//delete network metrics first of month
+const deleteNetworkMetrics = async () => {
+  try {
+    // Get all devices with their deviceIds
+    const devices = await Device.find({}, { deviceId: 1 }).lean();
+    const deviceIds = devices.map((device) => device.deviceId);
+
+    if (deviceIds.length === 0) {
+      console.log("No devices found");
+      return;
+    }
+
+    console.log(`Processing ${deviceIds.length} devices...`);
+
+    // Calculate date range for previous month
+    const now = new Date();
+    const previousMonthStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1
+    );
+    const previousMonthEnd = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      0,
+      23,
+      59,
+      59,
+      999
+    );
+
+    // Calculate aggregated metrics for each device using MongoDB aggregation pipeline
+    const aggregatedMetrics = await NetworkMetrics.aggregate([
+      {
+        $match: {
+          deviceId: { $in: deviceIds },
+          timestamp: {
+            $gte: previousMonthStart,
+            $lte: previousMonthEnd,
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$deviceId",
+          totalBytesReceived: { $sum: "$bytesReceived" },
+          totalBytesSent: { $sum: "$bytesSent" },
+          avgBytesReceived: { $avg: "$bytesReceived" },
+          avgBytesSent: { $avg: "$bytesSent" },
+          totalPacketsReceived: { $sum: "$packetsReceived" },
+          totalPacketsSent: { $sum: "$packetsSent" },
+          totalErrorsReceived: { $sum: "$errorsReceived" },
+          totalErrorsSent: { $sum: "$errorsSent" },
+          dataPoints: { $sum: 1 },
+        },
+      },
+    ]);
+
+    console.log(`Calculated metrics for ${aggregatedMetrics.length} devices`);
+
+    // Batch update devices with their previous month metrics
+    const bulkOperations = aggregatedMetrics.map((metrics) => ({
+      updateOne: {
+        filter: { deviceId: metrics._id },
+        update: {
+          $set: {
+            previousMonthNetworkMetrics: {
+              totalBytesReceived: metrics.totalBytesReceived || 0,
+              totalBytesSent: metrics.totalBytesSent || 0,
+              avgBytesReceived: Math.round(metrics.avgBytesReceived || 0),
+              avgBytesSent: Math.round(metrics.avgBytesSent || 0),
+              totalPacketsReceived: metrics.totalPacketsReceived || 0,
+              totalPacketsSent: metrics.totalPacketsSent || 0,
+              totalErrorsReceived: metrics.totalErrorsReceived || 0,
+              totalErrorsSent: metrics.totalErrorsSent || 0,
+              dataPoints: metrics.dataPoints || 0,
+            },
+          },
+        },
+      },
+    }));
+
+    // Execute bulk update if there are operations to perform
+    if (bulkOperations.length > 0) {
+      const updateResult = await Device.bulkWrite(bulkOperations, {
+        ordered: false,
+      });
+      console.log(
+        `Updated ${updateResult.modifiedCount} devices with previous month metrics`
+      );
+    }
+
+    // Handle devices that have no network metrics (set empty/zero values)
+    const devicesWithMetrics = new Set(aggregatedMetrics.map((m) => m._id));
+    const devicesWithoutMetrics = deviceIds.filter(
+      (id) => !devicesWithMetrics.has(id)
+    );
+
+    if (devicesWithoutMetrics.length > 0) {
+      const emptyMetricsUpdate = await Device.updateMany(
+        { deviceId: { $in: devicesWithoutMetrics } },
+        {
+          $set: {
+            previousMonthNetworkMetrics: {
+              totalBytesReceived: 0,
+              totalBytesSent: 0,
+              avgBytesReceived: 0,
+              avgBytesSent: 0,
+              totalPacketsReceived: 0,
+              totalPacketsSent: 0,
+              totalErrorsReceived: 0,
+              totalErrorsSent: 0,
+              dataPoints: 0,
+            },
+          },
+        }
+      );
+      console.log(
+        `Updated ${emptyMetricsUpdate.modifiedCount} devices with empty metrics`
+      );
+    }
+
+    // Delete all network metrics after successful update
+    const deleteResult = await NetworkMetrics.deleteMany({
+      deviceId: { $in: deviceIds },
+    });
+
+    console.log(
+      `Successfully deleted ${deleteResult.deletedCount} network metrics records`
+    );
+    console.log(
+      "Previous month network metrics updated and historical data cleared"
+    );
+  } catch (error) {
+    console.error(
+      "Error updating previous month metrics and deleting network data:",
+      error
+    );
+    throw error; // Re-throw to allow caller to handle the error
+  }
+};
+
 module.exports = {
   deletePastMetrics,
   updateServerStatus,
   sendServerStatusEmail,
   getServerStatusSummary,
+  deleteNetworkMetrics,
 };
