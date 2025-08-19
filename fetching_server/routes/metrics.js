@@ -207,7 +207,7 @@ router.get("/servers", authenticateToken, async (req, res) => {
       conditions.deviceId = { $in: deviceIds };
     }
 
-    if(req.query.status){
+    if (req.query.status) {
       conditions.status = req.query.status;
     }
 
@@ -565,18 +565,18 @@ router.get("/server-status", authenticateToken, async (req, res) => {
           _id: null,
           all: { $sum: 1 },
           up: {
-            $sum: { $cond: [{ $eq: ["$status", "up"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$status", "up"] }, 1, 0] },
           },
           down: {
-            $sum: { $cond: [{ $eq: ["$status", "down"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$status", "down"] }, 1, 0] },
           },
           critical: {
-            $sum: { $cond: [{ $eq: ["$status", "critical"] }, 1, 0] }
+            $sum: { $cond: [{ $eq: ["$status", "critical"] }, 1, 0] },
           },
           trouble: {
-            $sum: { $cond: [{ $eq: ["$status", "trouble"] }, 1, 0] }
-          }
-        }
+            $sum: { $cond: [{ $eq: ["$status", "trouble"] }, 1, 0] },
+          },
+        },
       },
       {
         $project: {
@@ -585,9 +585,9 @@ router.get("/server-status", authenticateToken, async (req, res) => {
           up: 1,
           down: 1,
           critical: 1,
-          trouble: 1
-        }
-      }
+          trouble: 1,
+        },
+      },
     ]);
 
     if (!result.length || Object.keys(result[0]).length === 0) {
@@ -598,12 +598,11 @@ router.get("/server-status", authenticateToken, async (req, res) => {
           up: 0,
           down: 0,
           critical: 0,
-          trouble: 0
-        }
+          trouble: 0,
+        },
       });
     }
-    
-    
+
     res.status(200).json({
       success: true,
       data: result[0],
@@ -621,8 +620,8 @@ router.get("/server-status", authenticateToken, async (req, res) => {
 router.put("/servers/:deviceId", authenticateToken, async (req, res) => {
   try {
     const { deviceId } = req.params;
-    const {name}= req.body;
-    if(!name){
+    const { name } = req.body;
+    if (!name) {
       return res.status(400).json({
         success: false,
         message: "Name is required",
@@ -640,8 +639,8 @@ router.put("/servers/:deviceId", authenticateToken, async (req, res) => {
     }
 
     // Update the server name
-    await Device.updateOne({ deviceId }, {deviceName: name });
-    
+    await Device.updateOne({ deviceId }, { deviceName: name });
+
     res.json({
       success: true,
       message: `Server ${deviceId} name updated successfully`,
@@ -691,59 +690,82 @@ router.delete("/servers/:deviceId", authenticateToken, async (req, res) => {
   }
 });
 
-router.get("/reports", authenticateToken, async (req, res) => {
+router.post("/reports", authenticateToken, async (req, res) => {
   try {
     // Define time ranges
     const now = new Date();
     const last24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const lastMonth = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const condition = {};
+    if (
+      req.body?.deviceIds &&
+      req.body.deviceIds.length > 0 &&
+      req.body.deviceIds[0] !== "all"
+    ) {
+      condition.deviceId = { $in: req.body.deviceIds };
+    }
+
+    if (req.body?.removedIds && req.body.removedIds.length > 0) {
+      condition.deviceId = { $nin: req.body.removedIds };
+    }
 
     // Get all active devices
-    const devices = await Device.find({}, 'deviceId deviceName ipV4 status').lean();
-    
+    const devices = await Device.find(
+      condition,
+      "deviceId deviceName ipV4 status"
+    ).lean();
+
     if (!devices || devices.length === 0) {
       return res.json({
         success: true,
         data: [],
-        message: "No devices found"
+        message: "No devices found",
       });
     }
 
-    const deviceIds = devices.map(device => device.deviceId);
+    const deviceIds = devices.map((device) => device.deviceId);
 
     // Parallel aggregation for all metrics and time periods
     const [
-      cpu24h, cpuWeek, cpuMonth,
-      memory24h, memoryWeek, memoryMonth,
-      disk24h, diskWeek, diskMonth,
-      network24h, networkWeek, networkMonth
+      cpu24h,
+      cpuWeek,
+      cpuMonth,
+      memory24h,
+      memoryWeek,
+      memoryMonth,
+      disk24h,
+      diskWeek,
+      diskMonth,
+      network24h,
+      networkWeek,
+      networkMonth,
     ] = await Promise.all([
       // CPU Metrics
-      aggregateMetrics(CPUMetrics, deviceIds, last24Hours, 'cpu'),
-      aggregateMetrics(CPUMetrics, deviceIds, lastWeek, 'cpu'),
-      aggregateMetrics(CPUMetrics, deviceIds, lastMonth, 'cpu'),
-      
+      aggregateMetrics(CPUMetrics, deviceIds, last24Hours, "cpu"),
+      aggregateMetrics(CPUMetrics, deviceIds, lastWeek, "cpu"),
+      aggregateMetrics(CPUMetrics, deviceIds, lastMonth, "cpu"),
+
       // Memory Metrics
-      aggregateMetrics(MemoryMetrics, deviceIds, last24Hours, 'memory'),
-      aggregateMetrics(MemoryMetrics, deviceIds, lastWeek, 'memory'),
-      aggregateMetrics(MemoryMetrics, deviceIds, lastMonth, 'memory'),
-      
+      aggregateMetrics(MemoryMetrics, deviceIds, last24Hours, "memory"),
+      aggregateMetrics(MemoryMetrics, deviceIds, lastWeek, "memory"),
+      aggregateMetrics(MemoryMetrics, deviceIds, lastMonth, "memory"),
+
       // Disk Metrics
-      aggregateMetrics(DiskMetrics, deviceIds, last24Hours, 'disk'),
-      aggregateMetrics(DiskMetrics, deviceIds, lastWeek, 'disk'),
-      aggregateMetrics(DiskMetrics, deviceIds, lastMonth, 'disk'),
-      
+      aggregateMetrics(DiskMetrics, deviceIds, last24Hours, "disk"),
+      aggregateMetrics(DiskMetrics, deviceIds, lastWeek, "disk"),
+      aggregateMetrics(DiskMetrics, deviceIds, lastMonth, "disk"),
+
       // Network Metrics
-      aggregateMetrics(NetworkMetrics, deviceIds, last24Hours, 'network'),
-      aggregateMetrics(NetworkMetrics, deviceIds, lastWeek, 'network'),
-      aggregateMetrics(NetworkMetrics, deviceIds, lastMonth, 'network')
+      aggregateMetrics(NetworkMetrics, deviceIds, last24Hours, "network"),
+      aggregateMetrics(NetworkMetrics, deviceIds, lastWeek, "network"),
+      aggregateMetrics(NetworkMetrics, deviceIds, lastMonth, "network"),
     ]);
 
     // Organize data by device
-    const reports = devices.map(device => {
+    const reports = devices.map((device) => {
       const deviceId = device.deviceId;
-      
+
       return {
         deviceId: device.deviceId,
         deviceName: device.deviceName,
@@ -754,21 +776,21 @@ router.get("/reports", authenticateToken, async (req, res) => {
             cpu: findMetricByDeviceId(cpu24h, deviceId),
             memory: findMetricByDeviceId(memory24h, deviceId),
             disk: findMetricByDeviceId(disk24h, deviceId),
-            network: findMetricByDeviceId(network24h, deviceId)
+            network: findMetricByDeviceId(network24h, deviceId),
           },
           lastWeek: {
             cpu: findMetricByDeviceId(cpuWeek, deviceId),
             memory: findMetricByDeviceId(memoryWeek, deviceId),
             disk: findMetricByDeviceId(diskWeek, deviceId),
-            network: findMetricByDeviceId(networkWeek, deviceId)
+            network: findMetricByDeviceId(networkWeek, deviceId),
           },
           lastMonth: {
             cpu: findMetricByDeviceId(cpuMonth, deviceId),
             memory: findMetricByDeviceId(memoryMonth, deviceId),
             disk: findMetricByDeviceId(diskMonth, deviceId),
-            network: findMetricByDeviceId(networkMonth, deviceId)
-          }
-        }
+            network: findMetricByDeviceId(networkMonth, deviceId),
+          },
+        },
       };
     });
 
@@ -776,15 +798,14 @@ router.get("/reports", authenticateToken, async (req, res) => {
       success: true,
       data: reports,
       totalDevices: devices.length,
-      generatedAt: now
+      generatedAt: now,
     });
-
   } catch (error) {
     console.error("Error generating reports:", error);
     res.status(500).json({
       success: false,
       error: "Failed to generate reports",
-      details: error.message
+      details: error.message,
     });
   }
 });
@@ -793,16 +814,16 @@ router.get("/reports", authenticateToken, async (req, res) => {
 async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
   // For network metrics (cumulative), we need first and last values
   // For CPU, memory, disk (instantaneous), we use average/min/max
-  if (metricType === 'network') {
+  if (metricType === "network") {
     const pipeline = [
       {
         $match: {
           deviceId: { $in: deviceIds },
-          timestamp: { $gte: startTime }
-        }
+          timestamp: { $gte: startTime },
+        },
       },
       {
-        $sort: { deviceId: 1, timestamp: 1 }
+        $sort: { deviceId: 1, timestamp: 1 },
       },
       {
         $group: {
@@ -822,55 +843,55 @@ async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
           firstErrorsReceived: { $first: "$errorsReceived" },
           lastErrorsReceived: { $last: "$errorsReceived" },
           firstErrorsSent: { $first: "$errorsSent" },
-          lastErrorsSent: { $last: "$errorsSent" }
-        }
+          lastErrorsSent: { $last: "$errorsSent" },
+        },
       },
       {
         $addFields: {
           // Calculate the difference (actual usage during the period)
-          totalBytesReceived: { 
+          totalBytesReceived: {
             $cond: [
               { $gte: ["$lastBytesReceived", "$firstBytesReceived"] },
               { $subtract: ["$lastBytesReceived", "$firstBytesReceived"] },
-              "$lastBytesReceived" // Handle counter reset case
-            ]
+              "$lastBytesReceived", // Handle counter reset case
+            ],
           },
-          totalBytesSent: { 
+          totalBytesSent: {
             $cond: [
               { $gte: ["$lastBytesSent", "$firstBytesSent"] },
               { $subtract: ["$lastBytesSent", "$firstBytesSent"] },
-              "$lastBytesSent"
-            ]
+              "$lastBytesSent",
+            ],
           },
-          totalPacketsReceived: { 
+          totalPacketsReceived: {
             $cond: [
               { $gte: ["$lastPacketsReceived", "$firstPacketsReceived"] },
               { $subtract: ["$lastPacketsReceived", "$firstPacketsReceived"] },
-              "$lastPacketsReceived"
-            ]
+              "$lastPacketsReceived",
+            ],
           },
-          totalPacketsSent: { 
+          totalPacketsSent: {
             $cond: [
               { $gte: ["$lastPacketsSent", "$firstPacketsSent"] },
               { $subtract: ["$lastPacketsSent", "$firstPacketsSent"] },
-              "$lastPacketsSent"
-            ]
+              "$lastPacketsSent",
+            ],
           },
-          totalErrorsReceived: { 
+          totalErrorsReceived: {
             $cond: [
               { $gte: ["$lastErrorsReceived", "$firstErrorsReceived"] },
               { $subtract: ["$lastErrorsReceived", "$firstErrorsReceived"] },
-              "$lastErrorsReceived"
-            ]
+              "$lastErrorsReceived",
+            ],
           },
-          totalErrorsSent: { 
+          totalErrorsSent: {
             $cond: [
               { $gte: ["$lastErrorsSent", "$firstErrorsSent"] },
               { $subtract: ["$lastErrorsSent", "$firstErrorsSent"] },
-              "$lastErrorsSent"
-            ]
-          }
-        }
+              "$lastErrorsSent",
+            ],
+          },
+        },
       },
       {
         $addFields: {
@@ -878,19 +899,49 @@ async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
           avgBytesReceived: {
             $cond: [
               { $gt: ["$dataPoints", 1] },
-              { $divide: ["$totalBytesReceived", { $subtract: [{ $divide: [{ $subtract: ["$lastRecorded", "$firstRecorded"] }, 1000] }, 0] }] },
-              0
-            ]
+              {
+                $divide: [
+                  "$totalBytesReceived",
+                  {
+                    $subtract: [
+                      {
+                        $divide: [
+                          { $subtract: ["$lastRecorded", "$firstRecorded"] },
+                          1000,
+                        ],
+                      },
+                      0,
+                    ],
+                  },
+                ],
+              },
+              0,
+            ],
           },
           avgBytesSent: {
             $cond: [
               { $gt: ["$dataPoints", 1] },
-              { $divide: ["$totalBytesSent", { $subtract: [{ $divide: [{ $subtract: ["$lastRecorded", "$firstRecorded"] }, 1000] }, 0] }] },
-              0
-            ]
-          }
-        }
-      }
+              {
+                $divide: [
+                  "$totalBytesSent",
+                  {
+                    $subtract: [
+                      {
+                        $divide: [
+                          { $subtract: ["$lastRecorded", "$firstRecorded"] },
+                          1000,
+                        ],
+                      },
+                      0,
+                    ],
+                  },
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
     ];
 
     return await Model.aggregate(pipeline).exec();
@@ -900,8 +951,8 @@ async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
       {
         $match: {
           deviceId: { $in: deviceIds },
-          timestamp: { $gte: startTime }
-        }
+          timestamp: { $gte: startTime },
+        },
       },
       {
         $group: {
@@ -909,9 +960,9 @@ async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
           ...getAggregationFields(metricType),
           dataPoints: { $sum: 1 },
           firstRecorded: { $min: "$timestamp" },
-          lastRecorded: { $max: "$timestamp" }
-        }
-      }
+          lastRecorded: { $max: "$timestamp" },
+        },
+      },
     ];
 
     return await Model.aggregate(pipeline).exec();
@@ -921,39 +972,39 @@ async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
 // Helper function to get aggregation fields based on metric type
 function getAggregationFields(metricType) {
   switch (metricType) {
-    case 'cpu':
+    case "cpu":
       return {
         avgUsagePercentage: { $avg: "$usagePercentage" },
         maxUsagePercentage: { $max: "$usagePercentage" },
         minUsagePercentage: { $min: "$usagePercentage" },
         avgUserPercentage: { $avg: "$userPercentage" },
-        avgSysPercentage: { $avg: "$sysPercentage" }
+        avgSysPercentage: { $avg: "$sysPercentage" },
       };
-    
-    case 'memory':
+
+    case "memory":
       return {
         avgUsagePercentage: { $avg: "$usagePercentage" },
         maxUsagePercentage: { $max: "$usagePercentage" },
         minUsagePercentage: { $min: "$usagePercentage" },
         avgTotalMemory: { $avg: "$totalMemory" },
         avgUsedMemory: { $avg: "$usedMemory" },
-        avgFreeMemory: { $avg: "$freeMemory" }
+        avgFreeMemory: { $avg: "$freeMemory" },
       };
-    
-    case 'disk':
+
+    case "disk":
       return {
         avgUsagePercentage: { $avg: "$usagePercentage" },
         maxUsagePercentage: { $max: "$usagePercentage" },
         minUsagePercentage: { $min: "$usagePercentage" },
         avgSize: { $avg: "$size" },
         avgUsed: { $avg: "$used" },
-        avgAvailable: { $avg: "$available" }
+        avgAvailable: { $avg: "$available" },
       };
-    
-    case 'network':
+
+    case "network":
       // This is handled in the aggregateMetrics function for network
       return {};
-    
+
     default:
       return {};
   }
@@ -961,17 +1012,17 @@ function getAggregationFields(metricType) {
 
 // Helper function to find metric data for a specific device
 function findMetricByDeviceId(metricsArray, deviceId) {
-  const metric = metricsArray.find(m => m._id === deviceId);
+  const metric = metricsArray.find((m) => m._id === deviceId);
   if (!metric) {
     return {
       available: false,
-      message: "No data available for this period"
+      message: "No data available for this period",
     };
   }
 
   // Remove the _id field and add availability flag
   const { _id, ...data } = metric;
-  
+
   // Clean up network-specific fields that are not needed in the response
   const cleanedData = { ...data };
   delete cleanedData.firstBytesReceived;
@@ -986,17 +1037,17 @@ function findMetricByDeviceId(metricsArray, deviceId) {
   delete cleanedData.lastErrorsReceived;
   delete cleanedData.firstErrorsSent;
   delete cleanedData.lastErrorsSent;
-  
+
   return {
     available: true,
     ...cleanedData,
     // Round percentage values to 2 decimal places
     ...Object.keys(cleanedData).reduce((acc, key) => {
-      if (key.includes('Percentage') && typeof cleanedData[key] === 'number') {
+      if (key.includes("Percentage") && typeof cleanedData[key] === "number") {
         acc[key] = Math.round(cleanedData[key] * 100) / 100;
       }
       return acc;
-    }, {})
+    }, {}),
   };
 }
 
