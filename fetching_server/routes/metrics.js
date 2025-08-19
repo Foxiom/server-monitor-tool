@@ -791,25 +791,131 @@ router.get("/reports", authenticateToken, async (req, res) => {
 
 // Helper function to aggregate metrics efficiently
 async function aggregateMetrics(Model, deviceIds, startTime, metricType) {
-  const pipeline = [
-    {
-      $match: {
-        deviceId: { $in: deviceIds },
-        timestamp: { $gte: startTime }
+  // For network metrics (cumulative), we need first and last values
+  // For CPU, memory, disk (instantaneous), we use average/min/max
+  if (metricType === 'network') {
+    const pipeline = [
+      {
+        $match: {
+          deviceId: { $in: deviceIds },
+          timestamp: { $gte: startTime }
+        }
+      },
+      {
+        $sort: { deviceId: 1, timestamp: 1 }
+      },
+      {
+        $group: {
+          _id: "$deviceId",
+          dataPoints: { $sum: 1 },
+          firstRecorded: { $min: "$timestamp" },
+          lastRecorded: { $max: "$timestamp" },
+          // Get first and last values for cumulative metrics
+          firstBytesReceived: { $first: "$bytesReceived" },
+          lastBytesReceived: { $last: "$bytesReceived" },
+          firstBytesSent: { $first: "$bytesSent" },
+          lastBytesSent: { $last: "$bytesSent" },
+          firstPacketsReceived: { $first: "$packetsReceived" },
+          lastPacketsReceived: { $last: "$packetsReceived" },
+          firstPacketsSent: { $first: "$packetsSent" },
+          lastPacketsSent: { $last: "$packetsSent" },
+          firstErrorsReceived: { $first: "$errorsReceived" },
+          lastErrorsReceived: { $last: "$errorsReceived" },
+          firstErrorsSent: { $first: "$errorsSent" },
+          lastErrorsSent: { $last: "$errorsSent" }
+        }
+      },
+      {
+        $addFields: {
+          // Calculate the difference (actual usage during the period)
+          totalBytesReceived: { 
+            $cond: [
+              { $gte: ["$lastBytesReceived", "$firstBytesReceived"] },
+              { $subtract: ["$lastBytesReceived", "$firstBytesReceived"] },
+              "$lastBytesReceived" // Handle counter reset case
+            ]
+          },
+          totalBytesSent: { 
+            $cond: [
+              { $gte: ["$lastBytesSent", "$firstBytesSent"] },
+              { $subtract: ["$lastBytesSent", "$firstBytesSent"] },
+              "$lastBytesSent"
+            ]
+          },
+          totalPacketsReceived: { 
+            $cond: [
+              { $gte: ["$lastPacketsReceived", "$firstPacketsReceived"] },
+              { $subtract: ["$lastPacketsReceived", "$firstPacketsReceived"] },
+              "$lastPacketsReceived"
+            ]
+          },
+          totalPacketsSent: { 
+            $cond: [
+              { $gte: ["$lastPacketsSent", "$firstPacketsSent"] },
+              { $subtract: ["$lastPacketsSent", "$firstPacketsSent"] },
+              "$lastPacketsSent"
+            ]
+          },
+          totalErrorsReceived: { 
+            $cond: [
+              { $gte: ["$lastErrorsReceived", "$firstErrorsReceived"] },
+              { $subtract: ["$lastErrorsReceived", "$firstErrorsReceived"] },
+              "$lastErrorsReceived"
+            ]
+          },
+          totalErrorsSent: { 
+            $cond: [
+              { $gte: ["$lastErrorsSent", "$firstErrorsSent"] },
+              { $subtract: ["$lastErrorsSent", "$firstErrorsSent"] },
+              "$lastErrorsSent"
+            ]
+          }
+        }
+      },
+      {
+        $addFields: {
+          // Calculate averages based on time period
+          avgBytesReceived: {
+            $cond: [
+              { $gt: ["$dataPoints", 1] },
+              { $divide: ["$totalBytesReceived", { $subtract: [{ $divide: [{ $subtract: ["$lastRecorded", "$firstRecorded"] }, 1000] }, 0] }] },
+              0
+            ]
+          },
+          avgBytesSent: {
+            $cond: [
+              { $gt: ["$dataPoints", 1] },
+              { $divide: ["$totalBytesSent", { $subtract: [{ $divide: [{ $subtract: ["$lastRecorded", "$firstRecorded"] }, 1000] }, 0] }] },
+              0
+            ]
+          }
+        }
       }
-    },
-    {
-      $group: {
-        _id: "$deviceId",
-        ...getAggregationFields(metricType),
-        dataPoints: { $sum: 1 },
-        firstRecorded: { $min: "$timestamp" },
-        lastRecorded: { $max: "$timestamp" }
-      }
-    }
-  ];
+    ];
 
-  return await Model.aggregate(pipeline).exec();
+    return await Model.aggregate(pipeline).exec();
+  } else {
+    // For instantaneous metrics (CPU, memory, disk)
+    const pipeline = [
+      {
+        $match: {
+          deviceId: { $in: deviceIds },
+          timestamp: { $gte: startTime }
+        }
+      },
+      {
+        $group: {
+          _id: "$deviceId",
+          ...getAggregationFields(metricType),
+          dataPoints: { $sum: 1 },
+          firstRecorded: { $min: "$timestamp" },
+          lastRecorded: { $max: "$timestamp" }
+        }
+      }
+    ];
+
+    return await Model.aggregate(pipeline).exec();
+  }
 }
 
 // Helper function to get aggregation fields based on metric type
@@ -845,16 +951,8 @@ function getAggregationFields(metricType) {
       };
     
     case 'network':
-      return {
-        totalBytesReceived: { $sum: "$bytesReceived" },
-        totalBytesSent: { $sum: "$bytesSent" },
-        avgBytesReceived: { $avg: "$bytesReceived" },
-        avgBytesSent: { $avg: "$bytesSent" },
-        totalPacketsReceived: { $sum: "$packetsReceived" },
-        totalPacketsSent: { $sum: "$packetsSent" },
-        totalErrorsReceived: { $sum: "$errorsReceived" },
-        totalErrorsSent: { $sum: "$errorsSent" }
-      };
+      // This is handled in the aggregateMetrics function for network
+      return {};
     
     default:
       return {};
@@ -873,13 +971,29 @@ function findMetricByDeviceId(metricsArray, deviceId) {
 
   // Remove the _id field and add availability flag
   const { _id, ...data } = metric;
+  
+  // Clean up network-specific fields that are not needed in the response
+  const cleanedData = { ...data };
+  delete cleanedData.firstBytesReceived;
+  delete cleanedData.lastBytesReceived;
+  delete cleanedData.firstBytesSent;
+  delete cleanedData.lastBytesSent;
+  delete cleanedData.firstPacketsReceived;
+  delete cleanedData.lastPacketsReceived;
+  delete cleanedData.firstPacketsSent;
+  delete cleanedData.lastPacketsSent;
+  delete cleanedData.firstErrorsReceived;
+  delete cleanedData.lastErrorsReceived;
+  delete cleanedData.firstErrorsSent;
+  delete cleanedData.lastErrorsSent;
+  
   return {
     available: true,
-    ...data,
+    ...cleanedData,
     // Round percentage values to 2 decimal places
-    ...Object.keys(data).reduce((acc, key) => {
-      if (key.includes('Percentage') && typeof data[key] === 'number') {
-        acc[key] = Math.round(data[key] * 100) / 100;
+    ...Object.keys(cleanedData).reduce((acc, key) => {
+      if (key.includes('Percentage') && typeof cleanedData[key] === 'number') {
+        acc[key] = Math.round(cleanedData[key] * 100) / 100;
       }
       return acc;
     }, {})
