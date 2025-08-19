@@ -1,6 +1,13 @@
 # Exit on error
 $ErrorActionPreference = "Stop"
 
+# Self-elevation to ensure admin privileges for all methods
+if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Relaunching as Administrator for full functionality..."
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    exit
+}
+
 # Function to perform aggressive cleanup
 function Remove-PostingServerCompletely {
     param([string]$DirectoryPath = "posting_server")
@@ -572,13 +579,12 @@ function Set-MultipleAutoStartMethods {
         Get-WmiObject -Namespace "root\subscription" -Class "CommandLineEventConsumer" | Where-Object { $_.Name -eq $eventName } | Remove-WmiObject -ErrorAction SilentlyContinue
         Get-WmiObject -Namespace "root\subscription" -Class "__FilterToConsumerBinding" | Where-Object { $_.Filter -match $eventName } | Remove-WmiObject -ErrorAction SilentlyContinue
         
-        # Create WMI event filter for system startup
-        $filterQuery = "SELECT * FROM Win32_SystemTrace WHERE EventName = 'SystemStart'"
+        # Create WMI event filter for explorer.exe start (on user logon)
         $filter = Set-WmiInstance -Namespace "root\subscription" -Class "__EventFilter" -Arguments @{
             Name = $eventName
             EventNamespace = "root\cimv2"
             QueryLanguage = "WQL"
-            Query = "SELECT * FROM Win32_VolumeChangeEvent WHERE EventType = 2"
+            Query = "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'explorer.exe'"
         }
         
         # Create WMI event consumer
@@ -599,7 +605,7 @@ function Set-MultipleAutoStartMethods {
         Write-Host "❌ WMI Event Subscription failed: $($_.Exception.Message)"
     }
     
-    # Method 6: Windows Service (using sc.exe)
+    # Method 6: Windows Service (using PowerShell primary, with fallbacks)
     try {
         $totalMethods++
         Write-Host "📝 Setting up Windows Service..."
@@ -617,64 +623,65 @@ function Set-MultipleAutoStartMethods {
             Start-Sleep -Seconds 2
         }
         
-        # Create service wrapper script
-        $serviceWrapperScript = Join-Path $CurrentDirectory "service-wrapper.bat"
+        # Create service wrapper script (PowerShell-based)
+        $serviceWrapperScript = Join-Path $CurrentDirectory "service-wrapper.ps1"
         $serviceWrapperContent = @"
-@echo off
-title PM2 Service Wrapper
-echo Starting PM2 Service Wrapper...
-cd /d "$CurrentDirectory"
-
-:loop
-echo %DATE% %TIME% - Service wrapper checking PM2 status...
-
-REM Set comprehensive PATH
-set "PATH=C:\Program Files\nodejs;C:\Program Files (x86)\nodejs;%USERPROFILE%\AppData\Roaming\npm;%ALLUSERSPROFILE%\npm;%PATH%"
-
-REM Check if posting-server is running
-pm2 describe posting-server >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo %DATE% %TIME% - Posting server not running, starting...
-    call "$StartupScript"
-) else (
-    echo %DATE% %TIME% - Posting server is running
-)
-
-REM Wait 5 minutes before next check
-timeout /t 300 /nobreak > nul
-goto loop
+# Service Wrapper for PM2 Posting Server
+while (`$true) {
+    try {
+        Set-Location "$CurrentDirectory"
+        Add-Content -Path "logs\service-wrapper.log" -Value "`$(Get-Date) - Checking PM2 status..."
+        `$describe = & pm2 describe posting-server 2>`$null
+        if (`$LASTEXITCODE -ne 0) {
+            Add-Content -Path "logs\service-wrapper.log" -Value "`$(Get-Date) - Posting server not running, starting..."
+            & "$StartupScript"
+        } else {
+            Add-Content -Path "logs\service-wrapper.log" -Value "`$(Get-Date) - Posting server is running"
+        }
+    } catch {
+        Add-Content -Path "logs\service-wrapper.log" -Value "`$(Get-Date) - Error: `$(`$_.Exception.Message)"
+    }
+    Start-Sleep -Seconds 300
+}
 "@
         
-        Set-Content -Path $serviceWrapperScript -Value $serviceWrapperContent -Encoding ASCII
+        Set-Content -Path $serviceWrapperScript -Value $serviceWrapperContent -Encoding UTF8
         
         # Try to create service with different methods
-        try {
-            # Method 6a: Try with nssm if available
-            if (Get-Command nssm -ErrorAction SilentlyContinue) {
-                & nssm install $serviceName $serviceWrapperScript
-                & nssm set $serviceName Start SERVICE_AUTO_START
-                & nssm set $serviceName Description $serviceDescription
-                & nssm set $serviceName DisplayName $serviceDisplayName
-                & nssm start $serviceName
-                Write-Host "✅ Windows service created with NSSM"
-                $successCount++
-            } else {
-                throw "NSSM not available"
-            }
-        } catch {
-            # Method 6b: Try with sc.exe directly
+        # Method 6a: Try with nssm if available
+        if (Get-Command nssm -ErrorAction SilentlyContinue) {
+            & nssm install $serviceName "powershell.exe"
+            & nssm set $serviceName AppParameters "-NoProfile -ExecutionPolicy Bypass -File `"$serviceWrapperScript`""
+            & nssm set $serviceName AppDirectory $CurrentDirectory
+            & nssm set $serviceName Start SERVICE_AUTO_START
+            & nssm set $serviceName Description $serviceDescription
+            & nssm set $serviceName DisplayName $serviceDisplayName
+            & nssm start $serviceName
+            Write-Host "✅ Windows service created with NSSM"
+            $successCount++
+        } else {
+            # Method 6b: Use PowerShell New-Service
             try {
-                $result = & sc.exe create $serviceName binPath= "`"$serviceWrapperScript`"" start= auto DisplayName= $serviceDisplayName
-                if ($LASTEXITCODE -eq 0) {
-                    & sc.exe description $serviceName $serviceDescription
-                    & sc.exe start $serviceName
-                    Write-Host "✅ Windows service created with sc.exe"
-                    $successCount++
-                } else {
-                    throw "sc.exe failed with exit code $LASTEXITCODE"
-                }
+                New-Service -Name $serviceName -BinaryPathName "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$serviceWrapperScript`"" -StartupType Automatic -DisplayName $serviceDisplayName -Description $serviceDescription -ErrorAction Stop
+                Start-Service -Name $serviceName -ErrorAction Stop
+                Write-Host "✅ Windows service created with PowerShell"
+                $successCount++
             } catch {
-                Write-Host "❌ Windows service creation failed: $($_.Exception.Message)"
+                Write-Host "❌ PowerShell service creation failed: $($_.Exception.Message)"
+                # Method 6c: Fallback to sc.exe
+                try {
+                    $result = & sc.exe create $serviceName binPath= "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$serviceWrapperScript`"" start= auto DisplayName= $serviceDisplayName
+                    if ($LASTEXITCODE -eq 0) {
+                        & sc.exe description $serviceName $serviceDescription
+                        & sc.exe start $serviceName
+                        Write-Host "✅ Windows service created with sc.exe fallback"
+                        $successCount++
+                    } else {
+                        throw "sc.exe failed with exit code $LASTEXITCODE"
+                    }
+                } catch {
+                    Write-Host "❌ sc.exe service creation failed: $($_.Exception.Message)"
+                }
             }
         }
         
@@ -1156,20 +1163,21 @@ try {
 Add-Content -Path "logs\autostart.log" -Value "`$(Get-Date) - [PowerShell-Enhanced] Auto-start service completed"
 "@
 
+    Set-Content -Path $powershellStartupScript -Value $powershellStartupScriptContent -Encoding UTF8
+
     return @{
         BatchScript = $startupScript
         PowerShellScript = $powershellStartupScript
     }
 }
 
-# Replace the existing auto-start section in your script with this enhanced version:
-
 # Create enhanced startup scripts
 Write-Host "🔧 Creating enhanced startup scripts..."
-$scripts = New-EnhancedStartupScripts -CurrentDirectory $currentDir
+$currentDir = Get-Location
+$scripts = New-EnhancedStartupScripts -CurrentDirectory $currentDir.Path
 
 # Set up multiple auto-start methods
-$successfulMethods = Set-MultipleAutoStartMethods -CurrentDirectory $currentDir -StartupScript $scripts.BatchScript -PowerShellScript $scripts.PowerShellScript
+$successfulMethods = Set-MultipleAutoStartMethods -CurrentDirectory $currentDir.Path -StartupScript $scripts.BatchScript -PowerShellScript $scripts.PowerShellScript
 
 # Create additional fallback methods for older systems
 Write-Host "🔧 Setting up additional fallback methods for older systems..."
@@ -1180,7 +1188,7 @@ try {
     $wshContent = @"
 Dim objShell, currentDir
 Set objShell = CreateObject("WScript.Shell")
-currentDir = "$currentDir"
+currentDir = "$($currentDir.Path)"
 
 ' Change to the correct directory
 objShell.CurrentDirectory = currentDir
@@ -1222,7 +1230,7 @@ try {
         $allUsersScript = Join-Path $allUsersStartup "PM2PostingServerAutoStart.bat"
         $allUsersContent = @"
 @echo off
-cd /d "$currentDir"
+cd /d "$($currentDir.Path)"
 call "$($scripts.BatchScript)" /silent
 "@
         Set-Content -Path $allUsersScript -Value $allUsersContent -Encoding ASCII
@@ -1251,7 +1259,7 @@ $healthCheckContent = @"
 # PM2 Health Check and Recovery Script
 param([switch]`$Fix, [switch]`$Verbose)
 
-`$currentDir = "$currentDir"
+`$currentDir = "$($currentDir.Path)"
 Set-Location `$currentDir
 
 function Write-Log {
