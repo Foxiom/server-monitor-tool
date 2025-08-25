@@ -1,7 +1,7 @@
 # Exit on error
 $ErrorActionPreference = "Stop"
 
-Write-Host "🗑️ Starting Posting Server Uninstall Process..." -ForegroundColor Yellow
+Write-Host "🗑️ Starting Complete Posting Server Uninstall Process..." -ForegroundColor Yellow
 Write-Host ""
 
 # Function to perform safe cleanup
@@ -23,13 +23,16 @@ function Remove-PostingServerSafely {
                 pm2 delete posting-server 2>$null | Out-Null
                 pm2 save 2>$null | Out-Null  # Save updated process list
                 Write-Host "✅ posting-server PM2 process removed successfully"
-            } else {
+            }
+            else {
                 Write-Host "ℹ️ No posting-server PM2 process found"
             }
-        } catch {
+        }
+        catch {
             Write-Host "⚠️ Error removing PM2 process: $($_.Exception.Message)"
         }
-    } else {
+    }
+    else {
         Write-Host "ℹ️ PM2 not found - skipping PM2 cleanup"
     }
     
@@ -48,11 +51,12 @@ function Remove-PostingServerSafely {
                         
                         # Check if process is running from our posting_server directory
                         return $processPath -like "*$DirectoryPath*" -or 
-                               $processDir -like "*$DirectoryPath*" -or
-                               (Test-Path $postingServerPath) -and ($processDir -eq $postingServerPath)
+                        $processDir -like "*$DirectoryPath*" -or
+                        (Test-Path $postingServerPath) -and ($processDir -eq $postingServerPath)
                     }
                     return $false
-                } catch {
+                }
+                catch {
                     return $false
                 }
             } | ForEach-Object {
@@ -61,7 +65,8 @@ function Remove-PostingServerSafely {
             }
             
             Start-Sleep -Seconds 2
-        } catch {
+        }
+        catch {
             Write-Host "⚠️ Error checking Node.js processes: $($_.Exception.Message)"
         }
     }
@@ -81,7 +86,8 @@ function Remove-PostingServerSafely {
             Write-Host "✅ Directory removed successfully"
             return $true
             
-        } catch {
+        }
+        catch {
             Write-Host "⚠️ PowerShell removal failed: $($_.Exception.Message)"
             
             # Try CMD rd command
@@ -92,7 +98,8 @@ function Remove-PostingServerSafely {
                     Write-Host "✅ Directory removed with CMD"
                     return $true
                 }
-            } catch {}
+            }
+            catch {}
             
             # Try Robocopy nuclear option
             try {
@@ -108,20 +115,22 @@ function Remove-PostingServerSafely {
                     Write-Host "✅ Directory removed with robocopy"
                     return $true
                 }
-            } catch {}
+            }
+            catch {}
             
             Write-Host "❌ Could not remove directory completely" -ForegroundColor Red
             return $false
         }
-    } else {
+    }
+    else {
         Write-Host "ℹ️ Directory $DirectoryPath does not exist"
         return $true
     }
 }
 
-# Function to remove auto-start configurations
+# Enhanced function to remove ALL auto-start configurations
 function Remove-AutoStartConfigurations {
-    Write-Host "🔧 Removing auto-start configurations..."
+    Write-Host "🔧 Removing ALL auto-start configurations..."
     
     $regName = "PM2PostingServerAutoStart"
     $removedCount = 0
@@ -135,7 +144,8 @@ function Remove-AutoStartConfigurations {
             Write-Host "✅ Removed user-level registry auto-start"
             $removedCount++
         }
-    } catch {
+    }
+    catch {
         Write-Host "ℹ️ No user-level registry entry found"
     }
     
@@ -148,25 +158,66 @@ function Remove-AutoStartConfigurations {
             Write-Host "✅ Removed machine-level registry auto-start"
             $removedCount++
         }
-    } catch {
+    }
+    catch {
         Write-Host "ℹ️ No machine-level registry entry found or access denied"
     }
     
-    # Remove Startup Folder Shortcut
+    # Remove User Startup Folder Shortcut
     try {
         $startupFolder = [System.Environment]::GetFolderPath('Startup')
         $shortcutPath = Join-Path $startupFolder "PM2PostingServerAutoStart.lnk"
         
         if (Test-Path $shortcutPath) {
             Remove-Item -Path $shortcutPath -Force -ErrorAction Stop
-            Write-Host "✅ Removed startup folder shortcut"
+            Write-Host "✅ Removed user startup folder shortcut"
             $removedCount++
         }
-    } catch {
-        Write-Host "ℹ️ No startup folder shortcut found"
+    }
+    catch {
+        Write-Host "ℹ️ No user startup folder shortcut found"
     }
     
-    # Remove Windows Service (if exists)
+    # Remove All Users Startup Folder Shortcut (NEW)
+    try {
+        $allUsersStartup = [System.Environment]::GetFolderPath('CommonStartup')
+        $allUsersShortcutPath = Join-Path $allUsersStartup "PM2PostingServerAutoStart.lnk"
+        
+        if (Test-Path $allUsersShortcutPath) {
+            Remove-Item -Path $allUsersShortcutPath -Force -ErrorAction Stop
+            Write-Host "✅ Removed all users startup folder shortcut"
+            $removedCount++
+        }
+    }
+    catch {
+        Write-Host "ℹ️ No all users startup folder shortcut found or access denied"
+    }
+    
+    # Remove Scheduled Task (NEW)
+    try {
+        $taskName = "PM2PostingServerAutoStart"
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        
+        if ($task) {
+            Write-Host "🕒 Removing scheduled task..."
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+            Write-Host "✅ Removed scheduled task: $taskName"
+            $removedCount++
+        }
+    }
+    catch {
+        Write-Host "ℹ️ No scheduled task found or couldn't remove"
+        
+        # Try alternative with schtasks.exe
+        try {
+            & schtasks /delete /tn "PM2PostingServerAutoStart" /f 2>$null
+            Write-Host "✅ Removed scheduled task with schtasks"
+            $removedCount++
+        }
+        catch {}
+    }
+    
+    # Remove Windows Service (Enhanced)
     try {
         $serviceName = "PM2PostingServer"
         $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
@@ -175,36 +226,61 @@ function Remove-AutoStartConfigurations {
             Write-Host "🛑 Stopping and removing Windows service..."
             Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
             
-            # Try using nssm if available
-            if (Get-Command nssm -ErrorAction SilentlyContinue) {
-                & nssm remove $serviceName confirm | Out-Null
-                Write-Host "✅ Removed Windows service with NSSM"
-            } else {
-                # Try using sc.exe
-                & sc.exe delete $serviceName | Out-Null
-                Write-Host "✅ Removed Windows service with sc.exe"
+            # Try multiple removal methods
+            $serviceRemoved = $false
+            
+            # Method 1: Remove-Service (PowerShell 6+)
+            try {
+                Remove-Service -Name $serviceName -ErrorAction Stop
+                $serviceRemoved = $true
+                Write-Host "✅ Removed Windows service with Remove-Service"
             }
-            $removedCount++
+            catch {
+                # Method 2: sc.exe
+                try {
+                    & sc.exe delete $serviceName | Out-Null
+                    $serviceRemoved = $true
+                    Write-Host "✅ Removed Windows service with sc.exe"
+                }
+                catch {
+                    # Method 3: NSSM (if available)
+                    if (Get-Command nssm -ErrorAction SilentlyContinue) {
+                        & nssm remove $serviceName confirm | Out-Null
+                        $serviceRemoved = $true
+                        Write-Host "✅ Removed Windows service with NSSM"
+                    }
+                }
+            }
+            
+            if ($serviceRemoved) {
+                $removedCount++
+            }
         }
-    } catch {
+    }
+    catch {
         Write-Host "ℹ️ No Windows service found or couldn't remove"
     }
     
-    # Remove startup script files
+    # Remove ALL startup script files (ENHANCED)
     $currentDir = Get-Location
     $startupFiles = @(
-        (Join-Path $currentDir "pm2-autostart.bat"),
-        (Join-Path $currentDir "pm2-autostart.ps1")
+        "pm2-autostart.bat",
+        "pm2-autostart.ps1", 
+        "pm2-autostart-hybrid.bat",  # NEW
+        "pm2-service.ps1",           # NEW
+        "pm2-diagnostic.ps1"         # NEW
     )
     
-    foreach ($file in $startupFiles) {
-        if (Test-Path $file) {
+    foreach ($fileName in $startupFiles) {
+        $filePath = Join-Path $currentDir $fileName
+        if (Test-Path $filePath) {
             try {
-                Remove-Item -Path $file -Force -ErrorAction Stop
-                Write-Host "✅ Removed startup script: $(Split-Path -Leaf $file)"
+                Remove-Item -Path $filePath -Force -ErrorAction Stop
+                Write-Host "✅ Removed startup script: $fileName"
                 $removedCount++
-            } catch {
-                Write-Host "⚠️ Could not remove startup script: $(Split-Path -Leaf $file)"
+            }
+            catch {
+                Write-Host "⚠️ Could not remove startup script: $fileName"
             }
         }
     }
@@ -236,7 +312,8 @@ function Remove-LogsDirectory {
             if ($safeToRemove) {
                 Remove-Item -Path "logs" -Recurse -Force -ErrorAction Stop
                 Write-Host "✅ Logs directory removed completely"
-            } else {
+            }
+            else {
                 # Only remove our specific log files
                 foreach ($ourLog in $ourLogFiles) {
                     $logPath = Join-Path "logs" $ourLog
@@ -248,7 +325,8 @@ function Remove-LogsDirectory {
                 Write-Host "ℹ️ Preserved logs directory (contains other log files)"
             }
             
-        } catch {
+        }
+        catch {
             Write-Host "⚠️ Error removing logs directory: $($_.Exception.Message)"
             
             # Try to remove specific log files
@@ -260,22 +338,45 @@ function Remove-LogsDirectory {
                 }
             }
         }
-    } else {
+    }
+    else {
         Write-Host "ℹ️ Logs directory does not exist"
     }
 }
 
+# NEW: Function to clean up temporary/lock files
+function Remove-TempFiles {
+    Write-Host "🧹 Cleaning up temporary files..."
+    
+    $tempFiles = @(
+        "$env:TEMP\pm2_autostart_lock.tmp",
+        "$env:TEMP\pm2_autostart_ps_lock.tmp"
+    )
+    
+    foreach ($tempFile in $tempFiles) {
+        if (Test-Path $tempFile) {
+            try {
+                Remove-Item -Path $tempFile -Force -ErrorAction Stop
+                Write-Host "✅ Removed temp file: $(Split-Path -Leaf $tempFile)"
+            }
+            catch {
+                Write-Host "⚠️ Could not remove temp file: $(Split-Path -Leaf $tempFile)"
+            }
+        }
+    }
+}
+
 # Main uninstall process
-Write-Host "Starting uninstall process..." -ForegroundColor Cyan
+Write-Host "Starting complete uninstall process..." -ForegroundColor Cyan
 
 # Step 1: Remove posting server directory and PM2 process
 Write-Host ""
 Write-Host "1️⃣ Removing posting server and PM2 process..."
 $serverRemoved = Remove-PostingServerSafely -DirectoryPath "posting_server"
 
-# Step 2: Remove auto-start configurations
+# Step 2: Remove ALL auto-start configurations (Enhanced)
 Write-Host ""
-Write-Host "2️⃣ Removing auto-start configurations..."
+Write-Host "2️⃣ Removing ALL auto-start configurations..."
 Remove-AutoStartConfigurations
 
 # Step 3: Remove logs directory
@@ -283,9 +384,14 @@ Write-Host ""
 Write-Host "3️⃣ Removing logs directory..."
 Remove-LogsDirectory
 
-# Step 4: Final verification
+# Step 4: Clean up temporary files (NEW)
 Write-Host ""
-Write-Host "4️⃣ Final verification..."
+Write-Host "4️⃣ Cleaning up temporary files..."
+Remove-TempFiles
+
+# Step 5: Final comprehensive verification
+Write-Host ""
+Write-Host "5️⃣ Final comprehensive verification..."
 
 # Check if PM2 still has posting-server process
 if (Get-Command pm2 -ErrorAction SilentlyContinue) {
@@ -294,7 +400,8 @@ if (Get-Command pm2 -ErrorAction SilentlyContinue) {
         if ($LASTEXITCODE -eq 0) {
             Write-Host "⚠️ Warning: posting-server process still exists in PM2" -ForegroundColor Yellow
             Write-Host "   Run 'pm2 delete posting-server' manually if needed"
-        } else {
+        }
+        else {
             Write-Host "✅ posting-server process successfully removed from PM2"
         }
         
@@ -303,28 +410,50 @@ if (Get-Command pm2 -ErrorAction SilentlyContinue) {
         Write-Host "📊 Remaining PM2 processes:"
         pm2 status
         
-    } catch {
+    }
+    catch {
         Write-Host "ℹ️ Could not verify PM2 status"
     }
 }
 
-# Check for remaining files
+# Comprehensive check for remaining items
 $remainingItems = @()
 if (Test-Path "posting_server") { $remainingItems += "posting_server directory" }
+
+# Check all potential startup script files
+$startupScripts = @("pm2-autostart.bat", "pm2-autostart.ps1", "pm2-autostart-hybrid.bat", "pm2-service.ps1", "pm2-diagnostic.ps1")
+foreach ($script in $startupScripts) {
+    if (Test-Path $script) { $remainingItems += $script }
+}
+
+# Check logs
 if (Test-Path "logs") { 
     $logFiles = Get-ChildItem -Path "logs" -File | Where-Object { 
         $_.Name -like "*posting*" -or $_.Name -like "*autostart*" 
     }
     if ($logFiles.Count -gt 0) { $remainingItems += "posting server log files" }
 }
-if (Test-Path "pm2-autostart.bat") { $remainingItems += "pm2-autostart.bat" }
-if (Test-Path "pm2-autostart.ps1") { $remainingItems += "pm2-autostart.ps1" }
+
+# Check scheduled task
+try {
+    $task = Get-ScheduledTask -TaskName "PM2PostingServerAutoStart" -ErrorAction SilentlyContinue
+    if ($task) { $remainingItems += "scheduled task" }
+}
+catch {}
+
+# Check Windows service
+try {
+    $service = Get-Service -Name "PM2PostingServer" -ErrorAction SilentlyContinue
+    if ($service) { $remainingItems += "Windows service" }
+}
+catch {}
 
 Write-Host ""
 if ($remainingItems.Count -eq 0) {
-    Write-Host "🎉 Uninstall completed successfully!" -ForegroundColor Green
-    Write-Host "   All posting server components have been removed."
-} else {
+    Write-Host "🎉 Complete uninstall successful!" -ForegroundColor Green
+    Write-Host "   ALL posting server components have been removed."
+}
+else {
     Write-Host "⚠️ Uninstall completed with some remaining items:" -ForegroundColor Yellow
     foreach ($item in $remainingItems) {
         Write-Host "   - $item" -ForegroundColor Yellow
@@ -337,11 +466,13 @@ Write-Host ""
 Write-Host "📋 What was removed:" -ForegroundColor Cyan
 Write-Host "   ✅ posting-server PM2 process (other PM2 processes preserved)"
 Write-Host "   ✅ posting_server directory and all contents"
-Write-Host "   ✅ Auto-start registry entries"
-Write-Host "   ✅ Startup folder shortcuts"
-Write-Host "   ✅ Auto-start script files"
-Write-Host "   ✅ Windows service (if configured)"
+Write-Host "   ✅ ALL auto-start registry entries (user + machine level)"
+Write-Host "   ✅ ALL startup folder shortcuts (user + all users)"
+Write-Host "   ✅ Scheduled task (PM2PostingServerAutoStart)"
+Write-Host "   ✅ Windows service (PM2PostingServer)"
+Write-Host "   ✅ ALL auto-start script files (5 different scripts)"
 Write-Host "   ✅ Log files (posting-server.log, autostart.log)"
+Write-Host "   ✅ Temporary/lock files"
 Write-Host ""
 Write-Host "📋 What was preserved:" -ForegroundColor Green
 Write-Host "   ✅ Node.js installation"
@@ -358,4 +489,4 @@ if (Get-Command pm2 -ErrorAction SilentlyContinue) {
 }
 
 Write-Host ""
-Write-Host "🗑️ Posting Server uninstall process completed!" -ForegroundColor Green
+Write-Host "🗑️ Complete Posting Server uninstall process finished!" -ForegroundColor Green
