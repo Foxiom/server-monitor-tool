@@ -76,12 +76,25 @@ function Remove-PostingServerSafely {
         Write-Host "🗑️ Removing directory: $DirectoryPath"
         
         try {
-            # Take ownership
-            Write-Host "  Taking ownership..."
-            takeown /F $DirectoryPath /R /D Y 2>$null | Out-Null
-            icacls $DirectoryPath /grant "$($env:USERNAME):F" /T /Q 2>$null | Out-Null
+            # Kill any processes that might be using files in the directory
+            Write-Host "  Killing processes using directory files..."
+            try {
+                # Use TASKKILL to force kill any node processes
+                & taskkill /F /IM node.exe /T 2>$null | Out-Null
+                & taskkill /F /IM pm2.exe /T 2>$null | Out-Null
+                Start-Sleep -Seconds 2
+            }
+            catch {}
             
-            # Remove with PowerShell
+            # Take ownership with more aggressive permissions
+            Write-Host "  Taking ownership..."
+            & takeown /F $DirectoryPath /R /D Y 2>$null | Out-Null
+            & icacls $DirectoryPath /grant "Everyone:F" /T /Q 2>$null | Out-Null
+            & icacls $DirectoryPath /grant "$($env:USERNAME):F" /T /Q 2>$null | Out-Null
+            & icacls $DirectoryPath /grant "Administrators:F" /T /Q 2>$null | Out-Null
+            
+            # Method 1: PowerShell Remove-Item with force
+            Write-Host "  Trying PowerShell Remove-Item..."
             Remove-Item -Recurse -Force $DirectoryPath -ErrorAction Stop
             Write-Host "✅ Directory removed successfully"
             return $true
@@ -90,30 +103,64 @@ function Remove-PostingServerSafely {
         catch {
             Write-Host "⚠️ PowerShell removal failed: $($_.Exception.Message)"
             
-            # Try CMD rd command
+            # Method 2: CMD rd command with multiple attempts
             try {
                 Write-Host "  Trying CMD rd command..."
-                cmd /c "rd /s /q `"$DirectoryPath`"" 2>$null
-                if (-not (Test-Path $DirectoryPath)) {
-                    Write-Host "✅ Directory removed with CMD"
-                    return $true
+                for ($i = 1; $i -le 3; $i++) {
+                    & cmd /c "rd /s /q `"$DirectoryPath`"" 2>$null
+                    if (-not (Test-Path $DirectoryPath)) {
+                        Write-Host "✅ Directory removed with CMD (attempt $i)"
+                        return $true
+                    }
+                    Start-Sleep -Seconds 1
                 }
             }
             catch {}
             
-            # Try Robocopy nuclear option
+            # Method 3: Enhanced Robocopy nuclear option
             try {
                 Write-Host "  Using robocopy method..."
                 $emptyDir = Join-Path $env:TEMP "empty_$(Get-Random)"
                 New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
                 
-                robocopy $emptyDir $DirectoryPath /MIR /R:0 /W:0 2>$null | Out-Null
+                # Multiple robocopy attempts with different parameters
+                & robocopy $emptyDir $DirectoryPath /MIR /R:0 /W:0 /NFL /NDL /NJH /NJS 2>$null | Out-Null
+                Start-Sleep -Seconds 1
+                & robocopy $emptyDir $DirectoryPath /MIR /R:0 /W:0 /E /PURGE 2>$null | Out-Null
+                
+                # Force remove with different methods
                 Remove-Item -Recurse -Force $DirectoryPath -ErrorAction SilentlyContinue
+                & cmd /c "rmdir /s /q `"$DirectoryPath`"" 2>$null
+                
                 Remove-Item -Recurse -Force $emptyDir -ErrorAction SilentlyContinue
                 
                 if (-not (Test-Path $DirectoryPath)) {
                     Write-Host "✅ Directory removed with robocopy"
                     return $true
+                }
+            }
+            catch {}
+            
+            # Method 4: PowerShell with Get-ChildItem and individual file removal
+            try {
+                Write-Host "  Trying individual file removal..."
+                if (Test-Path $DirectoryPath) {
+                    Get-ChildItem -Path $DirectoryPath -Recurse -Force | ForEach-Object {
+                        try {
+                            if ($_.PSIsContainer) {
+                                Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                            } else {
+                                Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+                            }
+                        }
+                        catch {}
+                    }
+                    Remove-Item -Path $DirectoryPath -Force -ErrorAction SilentlyContinue
+                    
+                    if (-not (Test-Path $DirectoryPath)) {
+                        Write-Host "✅ Directory removed with individual file removal"
+                        return $true
+                    }
                 }
             }
             catch {}
@@ -285,7 +332,12 @@ function Remove-AutoStartConfigurations {
         }
     }
     
-    Write-Host "📊 Removed $removedCount auto-start configuration(s)"
+    Write-Host ""
+    if ($removedCount -eq 0) {
+        Write-Host "ℹ️ No auto-start configurations found to remove" -ForegroundColor Yellow
+    } else {
+        Write-Host "📊 Removed $removedCount auto-start configuration(s)"
+    }
 }
 
 # Function to remove logs directory

@@ -545,7 +545,7 @@ if %PM2_FOUND% EQU 0 (
     echo %DATE% %TIME% - [BAT-%SESSION_ID%] PM2 not found, attempting installation... >> "logs\autostart.log"
     npm install -g pm2@latest >> "logs\autostart.log" 2>&1
     
-    REM Refresh PATH and try again
+    REM Refresh PATH after installation
     set "PATH=%NODE_PATHS%;%PATH%"
     for /f %%i in ('where pm2 2^>nul') do (
         echo %DATE% %TIME% - [BAT-%SESSION_ID%] PM2 installed at: %%i >> "logs\autostart.log"
@@ -1027,7 +1027,7 @@ function Install-PM2Service {
             Name = `$serviceName
             DisplayName = `$serviceDisplayName
             Description = `$serviceDescription
-            BinaryPathName = "cmd.exe /c `"`$startupScript`""
+            BinaryPathName = "cmd.exe /c `"" + `$startupScript + "`""
             StartupType = "Automatic"
         }
         
