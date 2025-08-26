@@ -714,7 +714,7 @@ try {
 Set-Location ..
 
 Write-Host ""
-Write-Host "✅ Server setup completed!" -ForegroundColor Green
+Write-Host "✅ Server setup completed" -ForegroundColor Green
 Write-Host ""
 Write-Host "🔧 Useful Commands:" -ForegroundColor Yellow
 Write-Host "   pm2 status                     # Check all PM2 processes"
