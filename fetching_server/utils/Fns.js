@@ -357,7 +357,7 @@ const deleteNetworkMetrics = async () => {
         },
       },
       {
-        $sort: { deviceId: 1, timestamp: 1 }
+        $sort: { deviceId: 1, timestamp: 1 },
       },
       {
         $group: {
@@ -365,7 +365,7 @@ const deleteNetworkMetrics = async () => {
           dataPoints: { $sum: 1 },
           firstTimestamp: { $min: "$timestamp" },
           lastTimestamp: { $max: "$timestamp" },
-          
+
           // Get first and last values for cumulative metrics
           firstBytesReceived: { $first: { $ifNull: ["$bytesReceived", 0] } },
           lastBytesReceived: { $last: { $ifNull: ["$bytesReceived", 0] } },
@@ -379,127 +379,160 @@ const deleteNetworkMetrics = async () => {
           lastErrorsReceived: { $last: { $ifNull: ["$errorsReceived", 0] } },
           firstErrorsSent: { $first: { $ifNull: ["$errorsSent", 0] } },
           lastErrorsSent: { $last: { $ifNull: ["$errorsSent", 0] } },
-          
+
           // Check if we have any non-null packet data
           hasPacketData: {
             $sum: {
               $cond: [
-                { $or: [
-                  { $ne: ["$packetsReceived", null] },
-                  { $ne: ["$packetsSent", null] }
-                ]},
+                {
+                  $or: [
+                    { $ne: ["$packetsReceived", null] },
+                    { $ne: ["$packetsSent", null] },
+                  ],
+                },
                 1,
-                0
-              ]
-            }
-          }
+                0,
+              ],
+            },
+          },
         },
       },
       {
         $addFields: {
           // Calculate the difference (actual usage during the period)
-          totalBytesReceived: { 
+          totalBytesReceived: {
             $cond: [
               { $gte: ["$lastBytesReceived", "$firstBytesReceived"] },
               { $subtract: ["$lastBytesReceived", "$firstBytesReceived"] },
-              "$lastBytesReceived" // Handle counter reset case
-            ]
+              "$lastBytesReceived", // Handle counter reset case
+            ],
           },
-          totalBytesSent: { 
+          totalBytesSent: {
             $cond: [
               { $gte: ["$lastBytesSent", "$firstBytesSent"] },
               { $subtract: ["$lastBytesSent", "$firstBytesSent"] },
-              "$lastBytesSent"
-            ]
+              "$lastBytesSent",
+            ],
           },
-          totalPacketsReceived: { 
+          totalPacketsReceived: {
             $cond: [
               { $eq: ["$hasPacketData", 0] }, // No packet data available
               0, // Use 0 instead of null for storage
               {
                 $cond: [
-                  { 
+                  {
                     $and: [
                       { $ne: ["$firstPacketsReceived", null] },
                       { $ne: ["$lastPacketsReceived", null] },
-                      { $gte: ["$lastPacketsReceived", "$firstPacketsReceived"] }
-                    ]
+                      {
+                        $gte: ["$lastPacketsReceived", "$firstPacketsReceived"],
+                      },
+                    ],
                   },
-                  { $subtract: ["$lastPacketsReceived", "$firstPacketsReceived"] },
-                  { $ifNull: ["$lastPacketsReceived", 0] }
-                ]
-              }
-            ]
+                  {
+                    $subtract: [
+                      "$lastPacketsReceived",
+                      "$firstPacketsReceived",
+                    ],
+                  },
+                  { $ifNull: ["$lastPacketsReceived", 0] },
+                ],
+              },
+            ],
           },
-          totalPacketsSent: { 
+          totalPacketsSent: {
             $cond: [
               { $eq: ["$hasPacketData", 0] }, // No packet data available
               0, // Use 0 instead of null for storage
               {
                 $cond: [
-                  { 
+                  {
                     $and: [
                       { $ne: ["$firstPacketsSent", null] },
                       { $ne: ["$lastPacketsSent", null] },
-                      { $gte: ["$lastPacketsSent", "$firstPacketsSent"] }
-                    ]
+                      { $gte: ["$lastPacketsSent", "$firstPacketsSent"] },
+                    ],
                   },
                   { $subtract: ["$lastPacketsSent", "$firstPacketsSent"] },
-                  { $ifNull: ["$lastPacketsSent", 0] }
-                ]
-              }
-            ]
+                  { $ifNull: ["$lastPacketsSent", 0] },
+                ],
+              },
+            ],
           },
-          totalErrorsReceived: { 
+          totalErrorsReceived: {
             $cond: [
               { $gte: ["$lastErrorsReceived", "$firstErrorsReceived"] },
               { $subtract: ["$lastErrorsReceived", "$firstErrorsReceived"] },
-              "$lastErrorsReceived"
-            ]
+              "$lastErrorsReceived",
+            ],
           },
-          totalErrorsSent: { 
+          totalErrorsSent: {
             $cond: [
               { $gte: ["$lastErrorsSent", "$firstErrorsSent"] },
               { $subtract: ["$lastErrorsSent", "$firstErrorsSent"] },
-              "$lastErrorsSent"
-            ]
-          }
-        }
+              "$lastErrorsSent",
+            ],
+          },
+        },
       },
       {
         $addFields: {
           // Calculate averages based on time period duration
           avgBytesReceived: {
             $cond: [
-              { $and: [
-                { $gt: ["$dataPoints", 1] },
-                { $gt: [{ $subtract: ["$lastTimestamp", "$firstTimestamp"] }, 0] }
-              ]},
-              { 
-                $divide: [
-                  "$totalBytesReceived", 
-                  { $divide: [{ $subtract: ["$lastTimestamp", "$firstTimestamp"] }, 1000] }
-                ] 
+              {
+                $and: [
+                  { $gt: ["$dataPoints", 1] },
+                  {
+                    $gt: [
+                      { $subtract: ["$lastTimestamp", "$firstTimestamp"] },
+                      0,
+                    ],
+                  },
+                ],
               },
-              0
-            ]
+              {
+                $divide: [
+                  "$totalBytesReceived",
+                  {
+                    $divide: [
+                      { $subtract: ["$lastTimestamp", "$firstTimestamp"] },
+                      1000,
+                    ],
+                  },
+                ],
+              },
+              0,
+            ],
           },
           avgBytesSent: {
             $cond: [
-              { $and: [
-                { $gt: ["$dataPoints", 1] },
-                { $gt: [{ $subtract: ["$lastTimestamp", "$firstTimestamp"] }, 0] }
-              ]},
-              { 
-                $divide: [
-                  "$totalBytesSent", 
-                  { $divide: [{ $subtract: ["$lastTimestamp", "$firstTimestamp"] }, 1000] }
-                ] 
+              {
+                $and: [
+                  { $gt: ["$dataPoints", 1] },
+                  {
+                    $gt: [
+                      { $subtract: ["$lastTimestamp", "$firstTimestamp"] },
+                      0,
+                    ],
+                  },
+                ],
               },
-              0
-            ]
-          }
-        }
+              {
+                $divide: [
+                  "$totalBytesSent",
+                  {
+                    $divide: [
+                      { $subtract: ["$lastTimestamp", "$firstTimestamp"] },
+                      1000,
+                    ],
+                  },
+                ],
+              },
+              0,
+            ],
+          },
+        },
       },
       {
         $project: {
@@ -512,9 +545,9 @@ const deleteNetworkMetrics = async () => {
           totalPacketsSent: 1,
           totalErrorsReceived: 1,
           totalErrorsSent: 1,
-          dataPoints: 1
-        }
-      }
+          dataPoints: 1,
+        },
+      },
     ]);
 
     console.log(`Calculated metrics for ${aggregatedMetrics.length} devices`);
@@ -528,11 +561,19 @@ const deleteNetworkMetrics = async () => {
             previousMonthNetworkMetrics: {
               totalBytesReceived: Math.max(0, metrics.totalBytesReceived || 0),
               totalBytesSent: Math.max(0, metrics.totalBytesSent || 0),
-              avgBytesReceived: Math.round(Math.max(0, metrics.avgBytesReceived || 0)),
+              avgBytesReceived: Math.round(
+                Math.max(0, metrics.avgBytesReceived || 0)
+              ),
               avgBytesSent: Math.round(Math.max(0, metrics.avgBytesSent || 0)),
-              totalPacketsReceived: Math.max(0, metrics.totalPacketsReceived || 0),
+              totalPacketsReceived: Math.max(
+                0,
+                metrics.totalPacketsReceived || 0
+              ),
               totalPacketsSent: Math.max(0, metrics.totalPacketsSent || 0),
-              totalErrorsReceived: Math.max(0, metrics.totalErrorsReceived || 0),
+              totalErrorsReceived: Math.max(
+                0,
+                metrics.totalErrorsReceived || 0
+              ),
               totalErrorsSent: Math.max(0, metrics.totalErrorsSent || 0),
               dataPoints: metrics.dataPoints || 0,
             },
@@ -582,13 +623,13 @@ const deleteNetworkMetrics = async () => {
     }
 
     // Delete all network metrics after successful update
-    // const deleteResult = await NetworkMetrics.deleteMany({
-    //   deviceId: { $in: deviceIds },
-    // });
+    const deleteResult = await NetworkMetrics.deleteMany({
+      deviceId: { $in: deviceIds },
+    });
 
-    // console.log(
-    //   `Successfully deleted ${deleteResult.deletedCount} network metrics records`
-    // );
+    console.log(
+      `Successfully deleted ${deleteResult.deletedCount} network metrics records`
+    );
     console.log(
       "Previous month network metrics updated and historical data cleared"
     );
