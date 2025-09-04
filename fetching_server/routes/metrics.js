@@ -55,15 +55,130 @@ router.get(
       const stats = await NetworkMetrics.aggregate([
         { $match: { deviceId } },
         {
+          $sort: { interface: 1, timestamp: 1 },
+        },
+        {
           $group: {
             _id: "$interface",
-            totalBytesReceived: { $sum: "$bytesReceived" },
-            totalBytesSent: { $sum: "$bytesSent" },
-            totalPacketsReceived: { $sum: "$packetsReceived" },
-            totalPacketsSent: { $sum: "$packetsSent" },
-            totalErrorsReceived: { $sum: "$errorsReceived" },
-            totalErrorsSent: { $sum: "$errorsSent" },
+            dataPoints: { $sum: 1 },
+            firstTimestamp: { $min: "$timestamp" },
+            lastTimestamp: { $max: "$timestamp" },
+
+            // Get first and last values for cumulative metrics
+            firstBytesReceived: { $first: { $ifNull: ["$bytesReceived", 0] } },
+            lastBytesReceived: { $last: { $ifNull: ["$bytesReceived", 0] } },
+            firstBytesSent: { $first: { $ifNull: ["$bytesSent", 0] } },
+            lastBytesSent: { $last: { $ifNull: ["$bytesSent", 0] } },
+            firstPacketsReceived: { $first: "$packetsReceived" },
+            lastPacketsReceived: { $last: "$packetsReceived" },
+            firstPacketsSent: { $first: "$packetsSent" },
+            lastPacketsSent: { $last: "$packetsSent" },
+            firstErrorsReceived: {
+              $first: { $ifNull: ["$errorsReceived", 0] },
+            },
+            lastErrorsReceived: { $last: { $ifNull: ["$errorsReceived", 0] } },
+            firstErrorsSent: { $first: { $ifNull: ["$errorsSent", 0] } },
+            lastErrorsSent: { $last: { $ifNull: ["$errorsSent", 0] } },
+
+            // Check if we have any non-null packet data
+            hasPacketData: {
+              $sum: {
+                $cond: [
+                  {
+                    $or: [
+                      { $ne: ["$packetsReceived", null] },
+                      { $ne: ["$packetsSent", null] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+
+            // Collect metrics for response (last 100)
             metrics: { $push: "$$ROOT" },
+          },
+        },
+        {
+          $addFields: {
+            // Calculate the difference (actual usage during the period)
+            totalBytesReceived: {
+              $cond: [
+                { $gte: ["$lastBytesReceived", "$firstBytesReceived"] },
+                { $subtract: ["$lastBytesReceived", "$firstBytesReceived"] },
+                "$lastBytesReceived", // Handle counter reset case
+              ],
+            },
+            totalBytesSent: {
+              $cond: [
+                { $gte: ["$lastBytesSent", "$firstBytesSent"] },
+                { $subtract: ["$lastBytesSent", "$firstBytesSent"] },
+                "$lastBytesSent",
+              ],
+            },
+            totalPacketsReceived: {
+              $cond: [
+                { $eq: ["$hasPacketData", 0] }, // No packet data available
+                0, // Use 0 instead of null for storage
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$firstPacketsReceived", null] },
+                        { $ne: ["$lastPacketsReceived", null] },
+                        {
+                          $gte: [
+                            "$lastPacketsReceived",
+                            "$firstPacketsReceived",
+                          ],
+                        },
+                      ],
+                    },
+                    {
+                      $subtract: [
+                        "$lastPacketsReceived",
+                        "$firstPacketsReceived",
+                      ],
+                    },
+                    { $ifNull: ["$lastPacketsReceived", 0] },
+                  ],
+                },
+              ],
+            },
+            totalPacketsSent: {
+              $cond: [
+                { $eq: ["$hasPacketData", 0] }, // No packet data available
+                0, // Use 0 instead of null for storage
+                {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$firstPacketsSent", null] },
+                        { $ne: ["$lastPacketsSent", null] },
+                        { $gte: ["$lastPacketsSent", "$firstPacketsSent"] },
+                      ],
+                    },
+                    { $subtract: ["$lastPacketsSent", "$firstPacketsSent"] },
+                    { $ifNull: ["$lastPacketsSent", 0] },
+                  ],
+                },
+              ],
+            },
+            totalErrorsReceived: {
+              $cond: [
+                { $gte: ["$lastErrorsReceived", "$firstErrorsReceived"] },
+                { $subtract: ["$lastErrorsReceived", "$firstErrorsReceived"] },
+                "$lastErrorsReceived",
+              ],
+            },
+            totalErrorsSent: {
+              $cond: [
+                { $gte: ["$lastErrorsSent", "$firstErrorsSent"] },
+                { $subtract: ["$lastErrorsSent", "$firstErrorsSent"] },
+                "$lastErrorsSent",
+              ],
+            },
           },
         },
         {
@@ -71,12 +186,12 @@ router.get(
             _id: 0,
             interface: "$_id",
             statistics: {
-              totalBytesReceived: 1,
-              totalBytesSent: 1,
-              totalPacketsReceived: 1,
-              totalPacketsSent: 1,
-              totalErrorsReceived: 1,
-              totalErrorsSent: 1,
+              totalBytesReceived: "$totalBytesReceived",
+              totalBytesSent: "$totalBytesSent",
+              totalPacketsReceived: "$totalPacketsReceived",
+              totalPacketsSent: "$totalPacketsSent",
+              totalErrorsReceived: "$totalErrorsReceived",
+              totalErrorsSent: "$totalErrorsSent",
             },
             metrics: {
               $slice: [
